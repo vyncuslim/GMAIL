@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
-import { getResend, senderAddress } from "@/lib/resend";
+import { getResend, isAllowedSender } from "@/lib/resend";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +18,10 @@ function normalizeAddress(value: unknown): string[] {
   return [];
 }
 
+function isVyncuslimAddress(value: unknown) {
+  return normalizeAddress(value).some((address) => address.endsWith("@vyncuslim.com"));
+}
+
 export async function GET(request: Request) {
   if (!(await isAuthenticated())) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -26,14 +30,13 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const folder = searchParams.get("folder") || "inbox";
   const resend = getResend();
-  const mailbox = senderAddress().toLowerCase();
 
   if (folder === "sent") {
     const { data, error } = await resend.emails.list({ limit: 100 });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
     const items = (data?.data || [])
-      .filter((m: any) => normalizeAddress(m.from).includes(mailbox))
+      .filter((m: any) => isVyncuslimAddress(m.from))
       .slice(0, 50)
       .map((m: any) => ({
         id: m.id,
@@ -51,7 +54,7 @@ export async function GET(request: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const items = (data?.data || [])
-    .filter((m: any) => normalizeAddress(m.to).includes(mailbox))
+    .filter((m: any) => isVyncuslimAddress(m.to))
     .slice(0, 50)
     .map((m: any) => ({
       id: m.id,
@@ -71,14 +74,23 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
+  const from = String(body.from || "").trim();
   const to = Array.isArray(body.to) ? body.to : [body.to].filter(Boolean);
+
+  if (!isAllowedSender(from)) {
+    return NextResponse.json(
+      { error: "From must be a valid @vyncuslim.com address" },
+      { status: 400 },
+    );
+  }
+
   if (!to.length) {
     return NextResponse.json({ error: "Recipient required" }, { status: 400 });
   }
 
   const resend = getResend();
   const { data, error } = await resend.emails.send({
-    from: senderAddress(),
+    from,
     to,
     cc: body.cc || undefined,
     bcc: body.bcc || undefined,

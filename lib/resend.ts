@@ -7,5 +7,10 @@ export function getResend() {
 }
 
 export function senderAddress() {
-  return process.env.MAIL_FROM || "vyncus@vyncuslim.com";
+  const value = process.env.MAIL_FROM;
+  if (!value) throw new Error("MAIL_FROM is not configured");
+  if (!value.toLowerCase().endsWith("@vyncuslim.com")) {
+    throw new Error("MAIL_FROM must use the @vyncuslim.com domain");
+  }
+  return value;
 }

@@ -3,17 +3,14 @@
 import {
   Archive,
   ArrowLeft,
-  ChevronDown,
   Clock3,
   FileText,
   Forward,
   Inbox,
-  Label,
   LogOut,
   Mail,
   MailOpen,
   Menu,
-  MoreVertical,
   Paperclip,
   PenSquare,
   RefreshCw,
@@ -378,7 +375,7 @@ export default function MailClient() {
                     <button title="Mark unread" onClick={() => patchItems(selectedItems(), { read: false })}><Mail size={17} /></button>
                     <button title="Mark read" onClick={() => patchItems(selectedItems(), { read: true })}><MailOpen size={17} /></button>
                     <button title="Star" onClick={() => patchItems(selectedItems(), { starred: true })}><Star size={17} /></button>
-                    <button title="Label" onClick={() => addLabel(selectedItems())}><Label size={17} /></button>
+                    <button title="Label" onClick={() => addLabel(selectedItems())}><Tag size={17} /></button>
                     <button title="Spam" onClick={() => patchItems(selectedItems(), { folder: "spam" })}><ShieldAlert size={17} /></button>
                     <button title="Trash" onClick={() => patchItems(selectedItems(), { folder: "trash" })}><Trash2 size={17} /></button>
                     {folder === "trash" && <button title="Delete forever" onClick={() => patchItems(selectedItems(), { hidden: true })}>Delete forever</button>}

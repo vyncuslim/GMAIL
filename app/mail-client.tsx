@@ -611,6 +611,24 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
     setSending(true);
     setError("");
     try {
+      const fromEmail = extractPlainEmail(from);
+      if (!/^[^\\s@]+@vyncuslim\\.com$/i.test(fromEmail)) {
+        throw new Error("From must be a valid @vyncuslim.com address.");
+      }
+
+      const toAddresses = splitAddressInput(to);
+      const ccAddresses = splitAddressInput(cc);
+      const bccAddresses = splitAddressInput(bcc);
+      if (!toAddresses.length) {
+        throw new Error("Add at least one recipient.");
+      }
+      const invalidRecipient = [...toAddresses, ...ccAddresses, ...bccAddresses].find(
+        (value) => !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(extractPlainEmail(value)),
+      );
+      if (invalidRecipient) {
+        throw new Error(`Invalid recipient address: ${invalidRecipient}`);
+      }
+
       const totalSize = files.reduce((n, f) => n + f.size, 0);
       if (totalSize > 4 * 1024 * 1024) throw new Error("Web uploads are limited to 4 MB total on this Vercel route.");
       if (scheduledAt && +new Date(scheduledAt) <= Date.now()) throw new Error("Scheduled time must be in the future.");
@@ -644,7 +662,7 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
     }
   }
 
-  return <form className="composer" onSubmit={submit}>
+  return <form className="composer" onSubmit={submit} noValidate>
     <div className="composer-head">
       <strong>{initial.inReplyTo ? "Reply" : initial.copyAttachmentsFrom ? "Forward" : "New message"}</strong>
       <div>
@@ -654,9 +672,9 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
     </div>
 
     <div className="compose-fields">
-      <label><span>From</span><input list="from-addresses" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="you@vyncuslim.com" required /></label>
+      <label><span>From</span><input list="from-addresses" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="you@vyncuslim.com" autoComplete="email" /></label>
       <datalist id="from-addresses">{knownFrom.map((a: string) => <option value={a} key={a} />)}</datalist>
-      <label><span>To</span><input value={to} onChange={(e) => setTo(e.target.value)} placeholder="recipient@example.com" required /></label>
+      <label><span>To</span><input value={to} onChange={(e) => setTo(e.target.value)} placeholder="recipient@example.com" autoComplete="email" /></label>
       <label><span>Cc</span><input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="Optional, comma separated" /></label>
       <label><span>Bcc</span><input value={bcc} onChange={(e) => setBcc(e.target.value)} placeholder="Optional, comma separated" /></label>
       <input className="subject-input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" />
@@ -714,6 +732,13 @@ function allAddresses(v: any): string[] {
 
 function firstVyncuslimAddress(v: any) {
   return allAddresses(v).find((x) => x.toLowerCase().endsWith("@vyncuslim.com")) || "";
+}
+
+function splitAddressInput(value: string) {
+  return value
+    .split(/[;,\\n]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 function extractPlainEmail(v: string) {

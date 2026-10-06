@@ -1,0 +1,11 @@
+import { Resend } from "resend";
+
+export function getResend() {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) throw new Error("RESEND_API_KEY is not configured");
+  return new Resend(key);
+}
+
+export function senderAddress() {
+  return process.env.MAIL_FROM || "vyncus@vyncuslim.com";
+}

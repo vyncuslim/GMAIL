@@ -12,7 +12,7 @@ Private Gmail-style webmail built for Vercel + Resend.
 
 ```
 RESEND_API_KEY=re_xxx
-MAIL_FROM=vyncus@vyncuslim.com
+MAIL_FROM=your-address@vyncuslim.com
 MAIL_APP_PASSWORD=choose-a-strong-private-password
 SESSION_SECRET=long-random-secret-at-least-32-bytes
 ```

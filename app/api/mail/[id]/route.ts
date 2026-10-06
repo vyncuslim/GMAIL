@@ -1,26 +1,8 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
-import { getResend } from "@/lib/resend";
+import { getResend, isDomainAddress } from "@/lib/resend";
 
 export const dynamic = "force-dynamic";
-
-function normalizeAddress(value: unknown): string[] {
-  if (!value) return [];
-  if (Array.isArray(value)) return value.flatMap(normalizeAddress);
-  if (typeof value === "string") {
-    const match = value.match(/<([^>]+)>/);
-    return [(match?.[1] || value).trim().toLowerCase()];
-  }
-  if (typeof value === "object") {
-    const obj = value as Record<string, unknown>;
-    return normalizeAddress(obj.email || obj.address || "");
-  }
-  return [];
-}
-
-function belongsToVyncuslim(value: unknown) {
-  return normalizeAddress(value).some((address) => address.endsWith("@vyncuslim.com"));
-}
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   if (!(await isAuthenticated())) {
@@ -34,16 +16,26 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   if (direction === "sent") {
     const { data, error } = await resend.emails.get(id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    if (!data || !belongsToVyncuslim((data as any).from)) {
+    if (!data || !isDomainAddress((data as any).from)) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    return NextResponse.json(data);
+    const attachments = await resend.emails.attachments.list({ emailId: id, limit: 100 });
+    return NextResponse.json({
+      ...data,
+      direction: "sent",
+      attachments: attachments.data?.data || [],
+    });
   }
 
   const { data, error } = await resend.emails.receiving.get(id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  if (!data || !belongsToVyncuslim((data as any).to)) {
+  if (!data || !isDomainAddress((data as any).to)) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  return NextResponse.json(data);
+  const attachments = await resend.emails.receiving.attachments.list({ emailId: id, limit: 100 });
+  return NextResponse.json({
+    ...data,
+    direction: "inbox",
+    attachments: attachments.data?.data || [],
+  });
 }

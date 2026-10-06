@@ -152,7 +152,7 @@ function Composer({initial, close, sent}:{initial:any;close:()=>void;sent:()=>vo
   </form>
 }
 
-function address(v:any) {
+function address(v:any): string {
   if(Array.isArray(v)) return v.map(address).join(", ");
   if(typeof v==="object" && v) return v.email || v.address || JSON.stringify(v);
   return v || "";

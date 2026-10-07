@@ -57,39 +57,68 @@ export async function GET(request: Request) {
   const folder = new URL(request.url).searchParams.get("folder") || "inbox";
   const resend = getResend();
 
-  if (folder === "sent") {
-    const { data, error } = await resend.emails.list({ limit: 100 });
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  try {
+    if (folder === "sent") {
+      const { data, error } = await resend.emails.list({ limit: 100 });
+      if (error) {
+        console.error("[Vyncuslim Mail] Failed to list sent mail", {
+          message: error.message,
+          name: (error as any)?.name,
+          statusCode: (error as any)?.statusCode,
+        });
+        return NextResponse.json(
+          { error: `Failed to load sent mail: ${error.message}` },
+          { status: 502 },
+        );
+      }
+
+      return NextResponse.json({
+        items: (data?.data || [])
+          .filter((m: any) => isDomainAddress(m.from))
+          .map((m: any) => ({
+            id: m.id,
+            direction: "sent",
+            from: m.from,
+            to: m.to,
+            subject: m.subject || "(no subject)",
+            date: m.created_at,
+          })),
+      });
+    }
+
+    const { data, error } = await resend.emails.receiving.list({ limit: 100 });
+    if (error) {
+      console.error("[Vyncuslim Mail] Failed to list received mail", {
+        message: error.message,
+        name: (error as any)?.name,
+        statusCode: (error as any)?.statusCode,
+      });
+      return NextResponse.json(
+        { error: `Failed to load inbox: ${error.message}` },
+        { status: 502 },
+      );
+    }
 
     return NextResponse.json({
       items: (data?.data || [])
-        .filter((m: any) => isDomainAddress(m.from))
+        .filter((m: any) => isDomainAddress(m.to))
         .map((m: any) => ({
           id: m.id,
-          direction: "sent",
+          direction: "inbox",
           from: m.from,
           to: m.to,
           subject: m.subject || "(no subject)",
           date: m.created_at,
         })),
     });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown mail provider error";
+    console.error("[Vyncuslim Mail] Mail listing crashed", error);
+    return NextResponse.json(
+      { error: `Failed to load mail: ${message}` },
+      { status: 502 },
+    );
   }
-
-  const { data, error } = await resend.emails.receiving.list({ limit: 100 });
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  return NextResponse.json({
-    items: (data?.data || [])
-      .filter((m: any) => isDomainAddress(m.to))
-      .map((m: any) => ({
-        id: m.id,
-        direction: "inbox",
-        from: m.from,
-        to: m.to,
-        subject: m.subject || "(no subject)",
-        date: m.created_at,
-      })),
-  });
 }
 
 export async function POST(request: Request) {

@@ -72,6 +72,7 @@ export default function MailClient() {
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [thread, setThread] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [compose, setCompose] = useState<any>(false);
   const [q, setQ] = useState("");
   const [hydrated, setHydrated] = useState(false);
@@ -100,6 +101,7 @@ export default function MailClient() {
 
   async function load() {
     setLoading(true);
+    setLoadError("");
     try {
       const [inboxRes, sentRes] = await Promise.all([
         fetch("/api/mail?folder=inbox", { cache: "no-store" }),
@@ -109,10 +111,28 @@ export default function MailClient() {
         location.href = "/login";
         return;
       }
-      const [inboxJson, sentJson] = await Promise.all([inboxRes.json(), sentRes.json()]);
-      const merged = [...(inboxJson.items || []), ...(sentJson.items || [])] as MailItem[];
+
+      const [inboxJson, sentJson] = await Promise.all([
+        inboxRes.json().catch(() => ({})),
+        sentRes.json().catch(() => ({})),
+      ]);
+
+      if (!inboxRes.ok) {
+        throw new Error(inboxJson.error || `Inbox request failed (HTTP ${inboxRes.status})`);
+      }
+      if (!sentRes.ok) {
+        throw new Error(sentJson.error || `Sent-mail request failed (HTTP ${sentRes.status})`);
+      }
+      if (!Array.isArray(inboxJson.items) || !Array.isArray(sentJson.items)) {
+        throw new Error("Mail server returned an invalid response.");
+      }
+
+      const merged = [...inboxJson.items, ...sentJson.items] as MailItem[];
       merged.sort((a, b) => +new Date(b.date) - +new Date(a.date));
       setItems(merged);
+    } catch (error) {
+      console.error("[Vyncuslim Mail] Failed to load mailbox", error);
+      setLoadError(error instanceof Error ? error.message : "Failed to load mailbox.");
     } finally {
       setLoading(false);
     }
@@ -387,6 +407,13 @@ export default function MailClient() {
 
               <div className="mail-list">
                 {loading && <div className="empty">Loading mail…</div>}
+                {!loading && loadError && (
+                  <div className="empty">
+                    <Mail size={34} />
+                    <p>{loadError}</p>
+                    <button className="quiet-btn" onClick={load}><RefreshCw size={16} />Try again</button>
+                  </div>
+                )}
 
                 {!loading && folder === "drafts" && visibleDrafts.map((draft) => (
                   <div className="mail-row draft-row" key={draft.id}>
@@ -422,8 +449,8 @@ export default function MailClient() {
                   );
                 })}
 
-                {!loading && folder !== "drafts" && visibleItems.length === 0 && <EmptyFolder folder={folder} />}
-                {!loading && folder === "drafts" && visibleDrafts.length === 0 && <EmptyFolder folder="drafts" />}
+                {!loading && !loadError && folder !== "drafts" && visibleItems.length === 0 && <EmptyFolder folder={folder} />}
+                {!loading && !loadError && folder === "drafts" && visibleDrafts.length === 0 && <EmptyFolder folder="drafts" />}
               </div>
             </>
           )}

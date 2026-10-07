@@ -1,7 +1,20 @@
 import { NextResponse } from "next/server";
-import { clearSession } from "@/lib/auth";
+import { SESSION_COOKIE } from "@/lib/auth";
+
+export const dynamic = "force-dynamic";
 
 export async function POST() {
-  await clearSession();
-  return NextResponse.json({ ok: true });
+  const response = NextResponse.json(
+    { ok: true },
+    { headers: { "cache-control": "no-store" } },
+  );
+  response.cookies.set(SESSION_COOKIE, "", {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 0,
+    expires: new Date(0),
+  });
+  return response;
 }

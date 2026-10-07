@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
 
-const COOKIE = "vmail_session";
+export const SESSION_COOKIE = "vmail_session";
 
 function secret() {
   const value = process.env.SESSION_SECRET;
@@ -15,9 +15,7 @@ export function makeSession() {
   return `${payload}.${sig}`;
 }
 
-export async function isAuthenticated() {
-  const jar = await cookies();
-  const actual = jar.get(COOKIE)?.value;
+export function isSessionValueValid(actual?: string | null) {
   if (!actual) return false;
   const expected = makeSession();
   const a = Buffer.from(actual);
@@ -25,18 +23,7 @@ export async function isAuthenticated() {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export async function setSession() {
+export async function isAuthenticated() {
   const jar = await cookies();
-  jar.set(COOKIE, makeSession(), {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 30,
-  });
-}
-
-export async function clearSession() {
-  const jar = await cookies();
-  jar.delete(COOKIE);
+  return isSessionValueValid(jar.get(SESSION_COOKIE)?.value);
 }

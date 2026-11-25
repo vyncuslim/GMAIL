@@ -133,7 +133,7 @@ export async function POST(request: Request) {
   const bcc = addressList(body.bcc);
 
   if (!isAllowedSender(from)) {
-    return NextResponse.json({ error: "From must be an @vyncuslim.com address" }, { status: 400 });
+    return NextResponse.json({ error: "From must be an @vyncuslim.com or @mail.vyncuslim.com address" }, { status: 400 });
   }
   if (!to.length) {
     return NextResponse.json({ error: "Recipient required" }, { status: 400 });

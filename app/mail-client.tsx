@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { MAIL_DOMAINS, type MailDomain, isAllowedSender, isDomainAddress, normalizeAddress } from "@/lib/mail-domains";
 
 type Direction = "inbox" | "sent";
 type MailItem = {
@@ -65,6 +66,7 @@ const LAST_FROM_KEY = "vmail_last_from";
 export default function MailClient() {
   const [folder, setFolder] = useState<Folder>("inbox");
   const [labelFilter, setLabelFilter] = useState("");
+  const [domainFilter, setDomainFilter] = useState<MailDomain | "all">("all");
   const [items, setItems] = useState<MailItem[]>([]);
   const [meta, setMeta] = useState<Record<string, MailMeta>>({});
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -160,6 +162,7 @@ export default function MailClient() {
     return items.filter((item) => {
       const m = mailMeta(item);
       if (m.hidden) return false;
+      if (domainFilter !== "all" && !isDomainAddress(item.direction === "sent" ? item.from : item.to, domainFilter)) return false;
       const ef = effectiveFolder(item);
       let show = false;
       if (labelFilter) show = (m.labels || []).includes(labelFilter) && ef !== "trash";
@@ -175,15 +178,16 @@ export default function MailClient() {
       if (!needle) return true;
       return JSON.stringify([item.from, item.to, item.subject]).toLowerCase().includes(needle);
     });
-  }, [items, meta, folder, labelFilter, q]);
+  }, [items, meta, folder, labelFilter, q, domainFilter]);
 
   const visibleDrafts = useMemo(() => {
     if (folder !== "drafts" || labelFilter) return [];
     const needle = q.trim().toLowerCase();
     return drafts
+      .filter((d) => domainFilter === "all" || isDomainAddress(d.from, domainFilter))
       .filter((d) => !needle || JSON.stringify([d.from, d.to, d.cc, d.bcc, d.subject, d.text]).toLowerCase().includes(needle))
       .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
-  }, [drafts, folder, labelFilter, q]);
+  }, [drafts, folder, labelFilter, q, domainFilter]);
 
   function setFolderView(next: Folder) {
     setFolder(next);
@@ -297,14 +301,14 @@ export default function MailClient() {
   }
 
   const knownFromAddresses = useMemo(() => {
-    const set = new Set<string>();
+    const set = new Set<string>(["vyncus@vyncuslim.com", "hello@vyncuslim.com", "vyncus@mail.vyncuslim.com"]);
     for (const item of items) {
-      for (const addr of [...allAddresses(item.from), ...allAddresses(item.to)]) {
-        if (addr.toLowerCase().endsWith("@vyncuslim.com")) set.add(addr.toLowerCase());
+      for (const addr of [...normalizeAddress(item.from), ...normalizeAddress(item.to)]) {
+        if (isAllowedSender(addr)) set.add(addr.toLowerCase());
       }
     }
     const last = typeof window !== "undefined" ? localStorage.getItem(LAST_FROM_KEY) : "";
-    if (last) set.add(last);
+    if (last && isAllowedSender(last)) set.add(last);
     return Array.from(set).sort();
   }, [items]);
 
@@ -360,7 +364,13 @@ export default function MailClient() {
             ))}
           </div>
 
-          <div className="account">@vyncuslim.com<br /><small>Private domain webmail · Resend</small></div>
+          <div className="account">
+            <label htmlFor="mail-domain-filter">Mailbox domain</label><br />
+            <select id="mail-domain-filter" aria-label="Mailbox domain" value={domainFilter} onChange={(event) => { setDomainFilter(event.target.value as MailDomain | "all"); setThread(null); setSelectedKeys(new Set()); }}>
+              <option value="all">All domains</option>
+              {MAIL_DOMAINS.map((domain) => <option key={domain} value={domain}>@{domain}</option>)}
+            </select><br /><small>Private domain webmail · Resend</small>
+          </div>
         </aside>
 
         <section className="content">
@@ -501,7 +511,7 @@ function MessageCard({ message, onCompose }: any) {
   const [showRemoteImages, setShowRemoteImages] = useState(false);
   const fromAddr = address(message.from);
   const toAddr = address(message.to);
-  const replyFrom = firstVyncuslimAddress(message.to) || firstVyncuslimAddress(message.from) || localStorage.getItem(LAST_FROM_KEY) || "";
+  const replyFrom = (message.direction === "sent" ? firstVyncuslimAddress(message.from) : firstVyncuslimAddress(message.to)) || firstVyncuslimAddress(message.from) || firstVyncuslimAddress(message.to) || (typeof window !== "undefined" ? localStorage.getItem(LAST_FROM_KEY) : "") || "";
   const messageId = message.message_id || headerValue(message.headers, "message-id");
   const previousRefs = headerValue(message.headers, "references");
   const references = [previousRefs, messageId].filter(Boolean).join(" ");
@@ -514,11 +524,11 @@ function MessageCard({ message, onCompose }: any) {
 
   function reply(all: boolean) {
     const from = replyFrom;
-    const sender = allAddresses(message.from);
+    const sender = message.direction === "sent" ? allAddresses(message.to) : allAddresses(message.reply_to || message.from);
     const originalTo = allAddresses(message.to);
     const originalCc = allAddresses(message.cc);
     const self = extractPlainEmail(from);
-    const others = Array.from(new Set([...originalTo, ...originalCc].filter((x) => x.toLowerCase() !== self.toLowerCase() && !x.toLowerCase().endsWith("@vyncuslim.com"))));
+    const others = Array.from(new Set([...originalTo, ...originalCc].filter((x) => x.toLowerCase() !== self.toLowerCase() && !isAllowedSender(x))));
     onCompose({
       from,
       to: sender.join(", "),
@@ -638,9 +648,8 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
     setSending(true);
     setError("");
     try {
-      const fromEmail = extractPlainEmail(from);
-      if (!/^[^\\s@]+@vyncuslim\\.com$/i.test(fromEmail)) {
-        throw new Error("From must be a valid @vyncuslim.com address.");
+      if (!isAllowedSender(from)) {
+        throw new Error("From must be a valid @vyncuslim.com or @mail.vyncuslim.com address.");
       }
 
       const toAddresses = splitAddressInput(to);
@@ -758,7 +767,7 @@ function allAddresses(v: any): string[] {
 }
 
 function firstVyncuslimAddress(v: any) {
-  return allAddresses(v).find((x) => x.toLowerCase().endsWith("@vyncuslim.com")) || "";
+  return normalizeAddress(v).find(isAllowedSender) || "";
 }
 
 function splitAddressInput(value: string) {

@@ -25,7 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { MAIL_DOMAINS, type MailDomain, isAllowedSender, isDomainAddress, normalizeAddress } from "@/lib/mail-domains";
+import { MAIL_DOMAINS, type MailDomain, isAllowedSender, isDomainAddress, normalizeAddress, decodeMailId, getMailAccount, extractEmail, migrateLegacyAddress } from "@/lib/mail-domains";
 
 type Direction = "inbox" | "sent";
 type MailItem = {
@@ -132,6 +132,8 @@ export default function MailClient() {
       const merged = [...inboxJson.items, ...sentJson.items] as MailItem[];
       merged.sort((a, b) => +new Date(b.date) - +new Date(a.date));
       setItems(merged);
+      const warnings = [...new Set([...(inboxJson.warnings || []), ...(sentJson.warnings || [])])];
+      if (warnings.length) setLoadError(warnings.join(" · "));
     } catch (error) {
       console.error("[Vyncuslim Mail] Failed to load mailbox", error);
       setLoadError(error instanceof Error ? error.message : "Failed to load mailbox.");
@@ -254,7 +256,7 @@ export default function MailClient() {
   async function openThread(item: MailItem) {
     const subject = normalizeSubject(item.subject);
     const related = items
-      .filter((candidate) => !mailMeta(candidate).hidden && normalizeSubject(candidate.subject) === subject)
+      .filter((candidate) => !mailMeta(candidate).hidden && decodeMailId(candidate.id)?.account === decodeMailId(item.id)?.account && normalizeSubject(candidate.subject) === subject)
       .sort((a, b) => +new Date(a.date) - +new Date(b.date))
       .slice(-20);
 
@@ -265,7 +267,8 @@ export default function MailClient() {
       related.map(async (mail) => {
         const response = await fetch(`/api/mail/${mail.id}?direction=${mail.direction}`, { cache: "no-store" });
         const detail = await response.json();
-        return { ...mail, ...detail, direction: mail.direction };
+        if (!response.ok) return { ...mail, text: detail.error || "Message unavailable" };
+        return { ...mail, ...detail, id: mail.id, direction: mail.direction };
       }),
     );
     setThread({ subject: item.subject, loading: false, messages: details });
@@ -275,7 +278,7 @@ export default function MailClient() {
     const id = initial.id || crypto.randomUUID();
     setCompose({
       id,
-      from: initial.from || "",
+      from: initial.from || (domainFilter !== "all" ? (domainFilter.endsWith("vynalthai.com") ? "vyncuslim@" : "vyncus@") + domainFilter : ""),
       to: initial.to || "",
       cc: initial.cc || "",
       bcc: initial.bcc || "",
@@ -301,7 +304,7 @@ export default function MailClient() {
   }
 
   const knownFromAddresses = useMemo(() => {
-    const set = new Set<string>(["vyncus@vyncuslim.com", "hello@vyncuslim.com", "vyncus@mail.vyncuslim.com"]);
+    const set = new Set<string>(["vyncus@vyncuslim.com", "hello@vyncuslim.com", "vyncus@mail.vyncuslim.com", "vyncuslim@vynalthai.com", "vyncuslim@mail.vynalthai.com", "hello@vynalthai.com", "support@vynalthai.com"]);
     for (const item of items) {
       for (const addr of [...normalizeAddress(item.from), ...normalizeAddress(item.to)]) {
         if (isAllowedSender(addr)) set.add(addr.toLowerCase());
@@ -448,7 +451,7 @@ export default function MailClient() {
                         title="Star"
                       ><Star size={17} fill={m.starred ? "currentColor" : "none"} /></button>
                       <button className="row-main" onClick={() => openThread(item)}>
-                        <div className="sender">{item.direction === "inbox" ? address(item.from) : address(item.to)}</div>
+                        <div className="sender">{item.direction === "inbox" ? address(item.from) : address(item.to)}{decodeMailId(item.id)?.account === "vynalth" && <span className="tiny-label">Vynalth AI</span>}</div>
                         <div className="subject">
                           {item.subject}
                           {(m.labels || []).map((label) => <span className="tiny-label" key={label}>{label}</span>)}
@@ -511,7 +514,9 @@ function MessageCard({ message, onCompose }: any) {
   const [showRemoteImages, setShowRemoteImages] = useState(false);
   const fromAddr = address(message.from);
   const toAddr = address(message.to);
-  const replyFrom = (message.direction === "sent" ? firstVyncuslimAddress(message.from) : firstVyncuslimAddress(message.to)) || firstVyncuslimAddress(message.from) || firstVyncuslimAddress(message.to) || (typeof window !== "undefined" ? localStorage.getItem(LAST_FROM_KEY) : "") || "";
+  const messageAccount = decodeMailId(message.id)?.account;
+  const ownAddresses = normalizeAddress(message.direction === "sent" ? message.from : message.to);
+  const replyFrom = ownAddresses.find((email) => getMailAccount(email) === messageAccount) || "";
   const messageId = message.message_id || headerValue(message.headers, "message-id");
   const previousRefs = headerValue(message.headers, "references");
   const references = [previousRefs, messageId].filter(Boolean).join(" ");
@@ -524,11 +529,12 @@ function MessageCard({ message, onCompose }: any) {
 
   function reply(all: boolean) {
     const from = replyFrom;
-    const sender = message.direction === "sent" ? allAddresses(message.to) : allAddresses(message.reply_to || message.from);
+    const sender = normalizeAddress(message.direction === "sent" ? message.to : message.reply_to || message.from);
     const originalTo = allAddresses(message.to);
     const originalCc = allAddresses(message.cc);
     const self = extractPlainEmail(from);
-    const others = Array.from(new Set([...originalTo, ...originalCc].filter((x) => x.toLowerCase() !== self.toLowerCase() && !isAllowedSender(x))));
+    const primary = new Set(sender.map((email) => email.toLowerCase()));
+    const others = Array.from(new Set([...originalTo, ...originalCc].filter((x) => x.toLowerCase() !== self.toLowerCase() && !primary.has(x.toLowerCase()) && !isAllowedSender(x))));
     onCompose({
       from,
       to: sender.join(", "),
@@ -604,7 +610,7 @@ function EmailBody({ html, text, allowRemoteImages }: any) {
 }
 
 function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
-  const [from, setFrom] = useState(initial.from || "");
+  const [from, setFrom] = useState(migrateLegacyAddress(initial.from || ""));
   const [to, setTo] = useState(initial.to || "");
   const [cc, setCc] = useState(initial.cc || "");
   const [bcc, setBcc] = useState(initial.bcc || "");
@@ -619,7 +625,7 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
   useEffect(() => {
     if (!initial.from) {
       const saved = localStorage.getItem(LAST_FROM_KEY);
-      if (saved) setFrom(saved);
+      if (saved) setFrom(migrateLegacyAddress(saved));
     }
   }, [initial.from]);
 
@@ -648,18 +654,19 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
     setSending(true);
     setError("");
     try {
-      if (!isAllowedSender(from)) {
-        throw new Error("From must be a valid @vyncuslim.com or @mail.vyncuslim.com address.");
+      const migratedFrom = migrateLegacyAddress(from);
+      if (!isAllowedSender(migratedFrom)) {
+        throw new Error("From must use one of your four supported personal or Vynalth AI domains.");
       }
 
-      const toAddresses = splitAddressInput(to);
-      const ccAddresses = splitAddressInput(cc);
-      const bccAddresses = splitAddressInput(bcc);
+      const toAddresses = splitAddressInput(to).map(migrateLegacyAddress);
+      const ccAddresses = splitAddressInput(cc).map(migrateLegacyAddress);
+      const bccAddresses = splitAddressInput(bcc).map(migrateLegacyAddress);
       if (!toAddresses.length) {
         throw new Error("Add at least one recipient.");
       }
       const invalidRecipient = [...toAddresses, ...ccAddresses, ...bccAddresses].find(
-        (value) => !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(extractPlainEmail(value)),
+        (value) => !extractEmail(value),
       );
       if (invalidRecipient) {
         throw new Error(`Invalid recipient address: ${invalidRecipient}`);
@@ -674,10 +681,10 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          from,
-          to,
-          cc,
-          bcc,
+          from: migratedFrom,
+          to: toAddresses,
+          cc: ccAddresses,
+          bcc: bccAddresses,
           subject,
           text,
           attachments,
@@ -689,7 +696,7 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
       });
       const json = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(json.error || "Send failed");
-      localStorage.setItem(LAST_FROM_KEY, extractPlainEmail(from));
+      localStorage.setItem(LAST_FROM_KEY, extractPlainEmail(migratedFrom));
       sent();
     } catch (err: any) {
       setError(err.message || "Send failed");
@@ -708,8 +715,11 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
     </div>
 
     <div className="compose-fields">
-      <label><span>From</span><input list="from-addresses" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="you@vyncuslim.com" autoComplete="email" /></label>
+      <label><span>From</span><input list="from-addresses" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="you@vyncuslim.com or you@vynalthai.com" autoComplete="email" /></label>
       <datalist id="from-addresses">{knownFrom.map((a: string) => <option value={a} key={a} />)}</datalist>
+      {[from, ...splitAddressInput(to), ...splitAddressInput(cc), ...splitAddressInput(bcc)].some((value) => migrateLegacyAddress(value) !== value) && (
+        <p role="status" style={{ margin: "6px 12px", fontSize: 12 }}>Legacy sleepsomno addresses will be converted to their matching Vynalth AI addresses before sending.</p>
+      )}
       <label><span>To</span><input value={to} onChange={(e) => setTo(e.target.value)} placeholder="recipient@example.com" autoComplete="email" /></label>
       <label><span>Cc</span><input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="Optional, comma separated" /></label>
       <label><span>Bcc</span><input value={bcc} onChange={(e) => setBcc(e.target.value)} placeholder="Optional, comma separated" /></label>
@@ -766,19 +776,15 @@ function allAddresses(v: any): string[] {
   return v.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
 }
 
-function firstVyncuslimAddress(v: any) {
-  return normalizeAddress(v).find(isAllowedSender) || "";
-}
-
 function splitAddressInput(value: string) {
   return value
-    .split(/[;,\\n]/)
+    .split(/[;,\n]/)
     .map((part) => part.trim())
     .filter(Boolean);
 }
 
 function extractPlainEmail(v: string) {
-  return allAddresses(v)[0] || v.trim();
+  return extractEmail(v);
 }
 
 function normalizeSubject(s: string) {

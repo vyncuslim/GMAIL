@@ -79,13 +79,15 @@ export async function GET(request: Request) {
   const results = await Promise.allSettled(accounts.map((account) => listAccount(account, folder)));
   const items = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
   const warnings: string[] = [];
+  const accountStatus: Record<MailAccount, "connected" | "unconfigured" | "error"> = { personal: "error", vynalth: "unconfigured" };
   if (!isVynalthConfigured()) warnings.push("Vynalth AI mail is not configured. Set its server-side API key and mailbox allowlist.");
   results.forEach((result, index) => {
+    accountStatus[accounts[index]] = result.status === "fulfilled" ? "connected" : "error";
     if (result.status === "rejected") {
       warnings.push((accounts[index] === "personal" ? "Personal" : "Vynalth AI") + " mail could not be loaded. Check its Resend configuration.");
     }
   });
-  return NextResponse.json({ items, warnings }, { headers: { "cache-control": "private, no-store" } });
+  return NextResponse.json({ items, warnings, accountStatus }, { headers: { "cache-control": "private, no-store" } });
 }
 
 export async function POST(request: Request) {

@@ -28,6 +28,9 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { MAIL_DOMAINS, type MailDomain, isAllowedSender, isDomainAddress, normalizeAddress, decodeMailId, getMailAccount, extractEmail, migrateLegacyAddress } from "@/lib/mail-domains";
 
 type Direction = "inbox" | "sent";
+type MailboxFilter = MailDomain | "all" | "sleepsomno.com";
+type AccountState = "connected" | "unconfigured" | "error" | "checking";
+const isLegacyRootRecipient = (value: unknown) => normalizeAddress(value).some((email) => email.split("@")[1] === "sleepsomno.com");
 type MailItem = {
   id: string;
   direction: Direction;
@@ -67,7 +70,7 @@ const LAST_FROM_KEY = "vmail_last_from";
 export default function MailClient() {
   const [folder, setFolder] = useState<Folder>("inbox");
   const [labelFilter, setLabelFilter] = useState("");
-  const [domainFilter, setDomainFilter] = useState<MailDomain | "all">("all");
+  const [domainFilter, setDomainFilter] = useState<MailboxFilter>("all");
   const [items, setItems] = useState<MailItem[]>([]);
   const [meta, setMeta] = useState<Record<string, MailMeta>>({});
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -76,6 +79,7 @@ export default function MailClient() {
   const [thread, setThread] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [enterpriseState, setEnterpriseState] = useState<AccountState>("checking");
   const [compose, setCompose] = useState<any>(false);
   const [q, setQ] = useState("");
   const [hydrated, setHydrated] = useState(false);
@@ -133,9 +137,12 @@ export default function MailClient() {
       const merged = [...inboxJson.items, ...sentJson.items] as MailItem[];
       merged.sort((a, b) => +new Date(b.date) - +new Date(a.date));
       setItems(merged);
+      const state = inboxJson.accountStatus?.vynalth;
+      setEnterpriseState(state === "connected" || state === "unconfigured" || state === "error" ? state : "error");
       const warnings = [...new Set([...(inboxJson.warnings || []), ...(sentJson.warnings || [])])];
       if (warnings.length) setLoadError(warnings.join(" · "));
     } catch (error) {
+      setEnterpriseState("error");
       console.error("[Vyncuslim Mail] Failed to load mailbox", error);
       setLoadError(error instanceof Error ? error.message : "Failed to load mailbox.");
     } finally {
@@ -165,7 +172,9 @@ export default function MailClient() {
     return items.filter((item) => {
       const m = mailMeta(item);
       if (m.hidden) return false;
-      if (domainFilter !== "all" && !isDomainAddress(item.direction === "sent" ? item.from : item.mailboxTo || item.to, domainFilter)) return false;
+      if (domainFilter === "sleepsomno.com") {
+        if (item.direction !== "inbox" || decodeMailId(item.id)?.account !== "vynalth" || !isLegacyRootRecipient(item.to)) return false;
+      } else if (domainFilter !== "all" && !isDomainAddress(item.direction === "sent" ? item.from : item.mailboxTo || item.to, domainFilter)) return false;
       const ef = effectiveFolder(item);
       let show = false;
       if (labelFilter) show = (m.labels || []).includes(labelFilter) && ef !== "trash";
@@ -187,7 +196,7 @@ export default function MailClient() {
     if (folder !== "drafts" || labelFilter) return [];
     const needle = q.trim().toLowerCase();
     return drafts
-      .filter((d) => domainFilter === "all" || isDomainAddress(d.from, domainFilter))
+      .filter((d) => domainFilter === "all" || (domainFilter !== "sleepsomno.com" && isDomainAddress(d.from, domainFilter)))
       .filter((d) => !needle || JSON.stringify([d.from, d.to, d.cc, d.bcc, d.subject, d.text]).toLowerCase().includes(needle))
       .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
   }, [drafts, folder, labelFilter, q, domainFilter]);
@@ -279,7 +288,7 @@ export default function MailClient() {
     const id = initial.id || crypto.randomUUID();
     setCompose({
       id,
-      from: initial.from || (domainFilter !== "all" ? (domainFilter.endsWith("vynalthai.com") ? "vyncuslim@" : "vyncus@") + domainFilter : ""),
+      from: initial.from || (domainFilter === "sleepsomno.com" ? "vyncuslim@vynalthai.com" : domainFilter !== "all" ? (domainFilter.endsWith("vynalthai.com") ? "vyncuslim@" : "vyncus@") + domainFilter : ""),
       to: initial.to || "",
       cc: initial.cc || "",
       bcc: initial.bcc || "",
@@ -370,10 +379,12 @@ export default function MailClient() {
 
           <div className="account">
             <label htmlFor="mail-domain-filter">Mailbox domain</label><br />
-            <select id="mail-domain-filter" aria-label="Mailbox domain" value={domainFilter} onChange={(event) => { setDomainFilter(event.target.value as MailDomain | "all"); setThread(null); setSelectedKeys(new Set()); }}>
+            <select id="mail-domain-filter" aria-label="Mailbox domain" value={domainFilter} onChange={(event) => { setDomainFilter(event.target.value as MailboxFilter); setThread(null); setSelectedKeys(new Set()); }}>
               <option value="all">All domains</option>
               {MAIL_DOMAINS.map((domain) => <option key={domain} value={domain}>@{domain}</option>)}
+              <option value="sleepsomno.com">@sleepsomno.com (legacy inbox)</option>
             </select><br /><small>Private domain webmail · Resend</small>
+            <p role="status" style={{ fontSize: 12, marginTop: 8 }}>Vynalth AI inbox: {({ connected: "Connected", unconfigured: "Configuration required", error: "Connection failed", checking: "Checking…" } as const)[enterpriseState]}</p>
           </div>
         </aside>
 
@@ -452,7 +463,7 @@ export default function MailClient() {
                         title="Star"
                       ><Star size={17} fill={m.starred ? "currentColor" : "none"} /></button>
                       <button className="row-main" onClick={() => openThread(item)}>
-                        <div className="sender">{item.direction === "inbox" ? address(item.from) : address(item.to)}{decodeMailId(item.id)?.account === "vynalth" && <span className="tiny-label">Vynalth AI</span>}</div>
+                        <div className="sender">{item.direction === "inbox" ? address(item.from) : address(item.to)}{decodeMailId(item.id)?.account === "vynalth" && <span className="tiny-label">Vynalth AI</span>}{item.direction === "inbox" && isLegacyRootRecipient(item.to) && <span className="tiny-label">SleepSomno</span>}</div>
                         <div className="subject">
                           {item.subject}
                           {(m.labels || []).map((label) => <span className="tiny-label" key={label}>{label}</span>)}

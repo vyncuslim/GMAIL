@@ -1,5 +1,8 @@
-// Shared, browser-safe allowlist for the two personal mail domains.
-export const MAIL_DOMAINS = ["vyncuslim.com", "mail.vyncuslim.com"] as const;
+// Browser-safe routing for the personal and company Resend accounts.
+export const PERSONAL_DOMAINS = ["vyncuslim.com", "mail.vyncuslim.com"] as const;
+export const VYNALTH_DOMAINS = ["vynalthai.com", "mail.vynalthai.com"] as const;
+export const MAIL_DOMAINS = [...PERSONAL_DOMAINS, ...VYNALTH_DOMAINS] as const;
+export type MailAccount = "personal" | "vynalth";
 export type MailDomain = (typeof MAIL_DOMAINS)[number];
 export const MAIL_DOMAIN = MAIL_DOMAINS[0];
 const EMAIL_PATTERN = /^[^\s@<>,;"\\]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
@@ -36,5 +39,36 @@ export function isDomainAddress(value: unknown, domain?: MailDomain): boolean {
   return normalizeAddress(value).some((email) => {
     const actual = getMailDomain(email);
     return actual !== null && (domain === undefined || actual === domain);
+  });
+}
+
+export function getMailAccount(value: string): MailAccount | null {
+  const domain = getMailDomain(value);
+  if (!domain) return null;
+  return domain === "vynalthai.com" || domain === "mail.vynalthai.com" ? "vynalth" : "personal";
+}
+
+export function isAccountAddress(value: unknown, account: MailAccount): boolean {
+  return normalizeAddress(value).some((email) => getMailAccount(email) === account);
+}
+
+// Personal IDs remain unchanged to preserve existing local labels and drafts.
+export function encodeMailId(account: MailAccount, id: string): string {
+  return account === "personal" ? id : "vynalth:" + id;
+}
+
+export function decodeMailId(value: unknown): { account: MailAccount; id: string } | null {
+  if (typeof value !== "string") return null;
+  const account: MailAccount = value.startsWith("vynalth:") ? "vynalth" : "personal";
+  const id = account === "vynalth" ? value.slice("vynalth:".length) : value;
+  return /^[A-Za-z0-9_-]+$/.test(id) ? { account, id } : null;
+}
+
+// Wildcards match the exact company domain, not suffixes or arbitrary subdomains.
+export function matchesVynalthMailbox(value: unknown, rules: string): boolean {
+  const allowed = new Set(rules.split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean));
+  return normalizeAddress(value).some((email) => {
+    if (getMailAccount(email) !== "vynalth") return false;
+    return allowed.has(email) || allowed.has("*@" + getMailDomain(email));
   });
 }

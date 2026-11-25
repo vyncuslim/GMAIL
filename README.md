@@ -1,30 +1,26 @@
 # Vyncuslim Mail
 
-Private Gmail-style webmail built for Vercel + Resend.
+Private Webmail for Vercel and two independent Resend accounts.
 
-- Web app: `mail.vyncuslim.com`
-- Email domains: `@vyncuslim.com` and `@mail.vyncuslim.com`
-- Receive mail for both personal domains when verified in Resend
-- Send mail from an address on either allowlisted domain once verified
-- Private password-gated UI
-- No fixed `MAIL_FROM` environment variable
+- Website: `mail.vyncuslim.com`
+- Personal domains: `vyncuslim.com`, `mail.vyncuslim.com`
+- Vynalth AI domains: `vynalthai.com`, `mail.vynalthai.com`
 
-## Required Vercel environment variables
+## Production environment variables
+
+Keep existing `RESEND_API_KEY`, `MAIL_APP_PASSWORD`, and `SESSION_SECRET`. To enable corporate mail, set these additional server-only variables in the Vercel project:
 
 ```
-RESEND_API_KEY=re_xxx
-MAIL_APP_PASSWORD=choose-a-strong-private-password
-SESSION_SECRET=long-random-secret-at-least-32-bytes
+RESEND_VYNALTH_API_KEY=<enterprise Resend key with read and send access>
+VYNALTH_MAILBOX_ADDRESSES=*@vynalthai.com,*@mail.vynalthai.com
 ```
 
-## Mail behavior
+The corporate allowlist is explicit and defaults to disabled. Exact addresses are also supported, separated by commas. Wildcards apply to exact domains only. Do not add any NEXT_PUBLIC_ prefix or commit credentials. Vynalth AI mail is only for the authorized private mailbox administrator; enabling both wildcards authorizes access to all mail on the two corporate domains for the authenticated site owner. Keep the existing private login restricted to that owner.
 
-The Inbox and Sent views support both domains with an All domains / individual domain filter. The From field suggests personal addresses, and replies prefer the original receiving or sending address. The server validates exact allowed domains and retains existing session checks on email and attachment routes. A new domain must be verified by Resend before it can send or receive. Resend list/read/send operations require a server-side API key with the corresponding access on the same personal Resend team.
+The server selects the provider from the sender for outbound messages and uses account-scoped IDs for inbound/sent detail, replies and attachments. Personal IDs remain unchanged. Each account lists the latest 100 received and 100 sent messages; failure or missing configuration on one account is reported without preventing the other account from loading. Mail history remains with Resend.
 
-## DNS design
+## DNS
 
-`mail.vyncuslim.com` points to Vercel for the web UI.
+Both company domains must pass Resend sending and receiving verification. In the `vynalthai.com` zone, the company subdomain MX must use the exact receiving host and priority shown in Resend. Do not overwrite existing personal DNS or web hosting records. The web app uses Resend's receiving API to list mail, so a webhook is not required for the current pull-based mailbox.
 
-Both domains need their respective Resend sending DNS records and receiving MX records. Keep the website's Vercel routing intact and verify that public DNS returns the required MX for each domain. Do not replace the root-domain MX or existing website DNS without checking the current provider.
-
-Never commit the Resend API key or private password to GitHub.
+After setting server environment variables, redeploy and test sending and receiving with each verified domain. Never expose or reuse the personal key for company mail.

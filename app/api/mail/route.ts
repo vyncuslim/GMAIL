@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
-import { addressList, migrateLegacyAddress, extractEmail, getResend, getMailAccount, resolveSender, canAccessMailbox, isVynalthConfigured, encodeMailId, decodeMailId, type MailAccount } from "@/lib/resend";
+import { addressList, migrateLegacyAddress, extractEmail, getResend, getMailAccount, resolveSender, canAccessMailbox, canAccessReceived, mailboxRecipients, isVynalthConfigured, encodeMailId, decodeMailId, type MailAccount } from "@/lib/resend";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +33,7 @@ async function copyProviderAttachments(
   }
 
   const message = await resend.emails.receiving.get(ref.id);
-  if (message.error || !message.data || !canAccessMailbox((message.data as any).to, ref.account)) throw new Error("Attachment source is unavailable.");
+  if (message.error || !message.data || !canAccessReceived((message.data as any).to, ref.account)) throw new Error("Attachment source is unavailable.");
   const listed = await resend.emails.receiving.attachments.list({ emailId: ref.id, limit: 100 });
   if (listed.error) return [];
   const copied = [];
@@ -58,12 +58,13 @@ async function listAccount(account: MailAccount, folder: "inbox" | "sent") {
     : await resend.emails.receiving.list({ limit: 100 });
   if (error) throw new Error("Resend request failed");
   return (data?.data || [])
-    .filter((message: any) => canAccessMailbox(folder === "sent" ? message.from : message.to, account))
+    .filter((message: any) => folder === "sent" ? canAccessMailbox(message.from, account) : canAccessReceived(message.to, account))
     .map((message: any) => ({
       id: encodeMailId(account, message.id),
       direction: folder,
       from: message.from,
       to: message.to,
+      mailboxTo: folder === "inbox" ? mailboxRecipients(message.to, account) : undefined,
       subject: message.subject || "(no subject)",
       date: message.created_at,
     }));

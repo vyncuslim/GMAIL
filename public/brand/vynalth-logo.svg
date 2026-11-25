@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-labelledby="title">
+  <title id="title">Vynalth AI symbol</title>
+  <rect width="200" height="200" rx="40" fill="#0f172a"/>
+  <g fill="none" stroke="#ffffff" stroke-linecap="round">
+    <path d="M54 52L100 136" stroke-width="18"/>
+    <path d="M146 52L100 136" stroke-width="18"/>
+    <path d="M36 136L68 136" stroke-width="14"/>
+    <path d="M132 136L164 136" stroke-width="14"/>
+  </g>
+</svg>

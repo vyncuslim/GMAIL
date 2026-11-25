@@ -1,4 +1,5 @@
 import "./globals.css";
+import "./mail-identities.css";
 
 export const metadata = {
   title: "Vyncuslim Mail",

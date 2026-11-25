@@ -24,10 +24,12 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { MAIL_DOMAINS, type MailDomain, isAllowedSender, isDomainAddress, normalizeAddress, decodeMailId, getMailAccount, extractEmail, migrateLegacyAddress } from "@/lib/mail-domains";
 
 import { buildReplyPlan, replyIdentity, sameThreadCandidate } from "@/lib/mail-reply";
+import { getMailIdentity, validatePhotoUrl } from "@/lib/mail-identities";
+import MailAvatar, { MailIdentitySettingsContext } from "./mail-avatar";
 
 type Direction = "inbox" | "sent";
 type MailboxFilter = MailDomain | "all" | "sleepsomno.com";
@@ -58,6 +60,7 @@ type Draft = {
   bcc: string;
   subject: string;
   text: string;
+  includeSignature?: boolean;
   updatedAt: string;
   inReplyTo?: string;
   references?: string;
@@ -85,6 +88,7 @@ export default function MailClient() {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [enterpriseState, setEnterpriseState] = useState<AccountState>("checking");
+  const [personalPhotoUrl, setPersonalPhotoUrl] = useState("");
   const [compose, setCompose] = useState<any>(false);
   const [q, setQ] = useState("");
   const [hydrated, setHydrated] = useState(false);
@@ -140,6 +144,7 @@ export default function MailClient() {
       }
 
       const merged = [...inboxJson.items, ...sentJson.items] as MailItem[];
+      setPersonalPhotoUrl(validatePhotoUrl(inboxJson.identitySettings?.personalPhotoUrl));
       merged.sort((a, b) => +new Date(b.date) - +new Date(a.date));
       setItems(merged);
       const state = inboxJson.accountStatus?.vynalth;
@@ -299,6 +304,7 @@ export default function MailClient() {
       bcc: initial.bcc || "",
       subject: initial.subject || "",
       text: initial.text || "",
+      includeSignature: initial.includeSignature,
       inReplyTo: initial.inReplyTo,
       references: initial.references,
       replyMode: initial.replyMode,
@@ -333,6 +339,7 @@ export default function MailClient() {
   }, [items]);
 
   return (
+    <MailIdentitySettingsContext.Provider value={{ personalPhotoUrl }}>
     <main className="app-shell">
       <header className="topbar">
         <div className="brand">
@@ -470,7 +477,10 @@ export default function MailClient() {
                         title="Star"
                       ><Star size={17} fill={m.starred ? "currentColor" : "none"} /></button>
                       <button className="row-main" onClick={() => openThread(item)}>
-                        <div className="sender">{item.direction === "inbox" ? address(item.from) : address(item.to)}{decodeMailId(item.id)?.account === "vynalth" && <span className="tiny-label">Vynalth AI</span>}{item.direction === "inbox" && isLegacyRootRecipient(item.to) && <span className="tiny-label">SleepSomno</span>}</div>
+                        <div className="sender-with-avatar">
+                          <MailAvatar value={item.direction === "inbox" ? item.from : item.to} size={28} />
+                          <div className="sender">{item.direction === "inbox" ? address(item.from) : address(item.to)}{decodeMailId(item.id)?.account === "vynalth" && <span className="tiny-label">Vynalth AI</span>}{item.direction === "inbox" && isLegacyRootRecipient(item.to) && <span className="tiny-label">SleepSomno</span>}</div>
+                        </div>
                         <div className="subject">
                           {item.subject}
                           {(m.labels || []).map((label) => <span className="tiny-label" key={label}>{label}</span>)}
@@ -505,6 +515,7 @@ export default function MailClient() {
         />
       )}
     </main>
+    </MailIdentitySettingsContext.Provider>
   );
 }
 
@@ -577,7 +588,7 @@ function MessageCard({ message, onCompose }: any) {
 
   return <article className="message-card">
     <div className="message-head">
-      <div className="avatar">{initials(fromAddr)}</div>
+      <MailAvatar value={message.from} />
       <div className="message-who">
         <b>{fromAddr}</b>
         <span>to {toAddr}{message.cc?.length ? `, cc ${address(message.cc)}` : ""}</span>
@@ -633,6 +644,7 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
   const [bcc, setBcc] = useState(initial.bcc || "");
   const [subject, setSubject] = useState(initial.subject || "");
   const [text, setText] = useState(initial.text || "");
+  const [includeSignature, setIncludeSignature] = useState(initial.includeSignature !== false);
   const [files, setFiles] = useState<File[]>([]);
   const [scheduledAt, setScheduledAt] = useState("");
   const [sending, setSending] = useState(false);
@@ -641,6 +653,8 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
   const inFlight = useRef(false);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const isReply = Boolean(initial.replySource || initial.inReplyTo);
+  const identitySettings = useContext(MailIdentitySettingsContext);
+  const identity = getMailIdentity(from, identitySettings);
   useEffect(() => {
     if (isReply) { bodyRef.current?.focus(); bodyRef.current?.setSelectionRange(0, 0); }
   }, [isReply]);
@@ -654,13 +668,13 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
 
   function saveNow() {
     clearTimeout(saveTimer.current);
-    onSave({ id: initial.id, from, to, cc, bcc, subject, text, updatedAt: new Date().toISOString(), inReplyTo: initial.inReplyTo, references: initial.references, replyMode: initial.replyMode, replySource: initial.replySource, copyAttachmentsFrom: initial.copyAttachmentsFrom });
+    onSave({ id: initial.id, from, to, cc, bcc, subject, text, includeSignature, updatedAt: new Date().toISOString(), inReplyTo: initial.inReplyTo, references: initial.references, replyMode: initial.replyMode, replySource: initial.replySource, copyAttachmentsFrom: initial.copyAttachmentsFrom });
   }
   useEffect(() => {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => { if (!inFlight.current) saveNow(); }, 500);
     return () => clearTimeout(saveTimer.current);
-  }, [from, to, cc, bcc, subject, text]);
+  }, [from, to, cc, bcc, subject, text, includeSignature]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -703,6 +717,7 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
           bcc: bccAddresses,
           subject,
           text,
+          includeSignature,
           attachments,
           scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
           inReplyTo: initial.inReplyTo,
@@ -733,8 +748,9 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
       </div>
     </div>
 
+    <div className="compose-content">
     <div className="compose-fields">
-      <label><span>From</span><input list="from-addresses" value={from} readOnly={Boolean(initial.replySource)} onChange={(e) => setFrom(e.target.value)} placeholder="you@vyncuslim.com or you@vynalthai.com" autoComplete="email" /></label>
+      <label><span>From</span><div className="sender-field"><MailAvatar value={from} size={28} /><input list="from-addresses" value={from} readOnly={Boolean(initial.replySource)} onChange={(e) => setFrom(e.target.value)} placeholder="you@vyncuslim.com or you@vynalthai.com" autoComplete="email" /></div></label>
       <datalist id="from-addresses">{knownFrom.map((a: string) => <option value={a} key={a} />)}</datalist>
       {[from, ...splitAddressInput(to), ...splitAddressInput(cc), ...splitAddressInput(bcc)].some((value) => migrateLegacyAddress(value) !== value) && (
         <p role="status" style={{ margin: "6px 12px", fontSize: 12 }}>Legacy sleepsomno addresses will be converted to their matching Vynalth AI addresses before sending.</p>
@@ -747,9 +763,20 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
 
     <textarea ref={bodyRef} className="compose-body" value={text} onChange={(e) => setText(e.target.value)} placeholder="Write a message…" />
 
+    <div className="signature-settings">
+      <label><input type="checkbox" checked={includeSignature} onChange={(event) => setIncludeSignature(event.target.checked)} />Include logo / photo signature</label>
+      {includeSignature && identity && <div className="signature-preview" aria-label="Email signature preview">
+        {identity.imageSrc && <img src={identity.imageSrc} alt={identity.imageAlt} width={48} height={identity.kind === "personal" ? 60 : 48} referrerPolicy="no-referrer" />}
+        <div><strong>{identity.displayName}</strong><span>{identity.email}</span><a href={identity.website} target="_blank" rel="noreferrer">{identity.kind === "company" ? "Vynalth AI website" : "Vyncus Lim website"}</a></div>
+      </div>}
+      {includeSignature && identity?.kind === "personal" && !identity.imageSrc && <small>Personal photo is not configured yet. This signature includes your name and address.</small>}
+      <small>{includeSignature && !identity ? "Choose a supported From address to preview its signature. " : ""}Signature images appear in the message body. Inbox avatars depend on the recipient’s email provider.</small>
+    </div>
+
     {!!files.length && <div className="compose-files">{files.map((f, i) => (
       <span key={`${f.name}-${i}`}><Paperclip size={13} />{f.name}<button type="button" onClick={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}>×</button></span>
     ))}</div>}
+    </div>
 
     <div className="schedule-row">
       <Clock3 size={15} />
@@ -837,11 +864,6 @@ function prepareEmailHtml(html: string, allowRemoteImages: boolean) {
   }
   safe = safe.replace(/<base\b[^>]*>/gi, "");
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><style>body{font-family:Arial,sans-serif;color:#202124;line-height:1.55;margin:0;padding:4px 0;overflow-wrap:anywhere}img{max-width:100%;height:auto}pre{white-space:pre-wrap}table{max-width:100%}</style></head><body>${safe}</body></html>`;
-}
-
-function initials(value: string) {
-  const email = extractPlainEmail(value);
-  return (email.split("@")[0].slice(0, 2) || "M").toUpperCase();
 }
 
 function formatDate(v: string) {

@@ -3,6 +3,7 @@ import { isAuthenticated } from "@/lib/auth";
 import { addressList, migrateLegacyAddress, extractEmail, getResend, getMailAccount, resolveSender, canAccessMailbox, canAccessReceived, mailboxRecipients, isVynalthConfigured, encodeMailId, decodeMailId, type MailAccount } from "@/lib/resend";
 
 import { makeReplyHeaders, safeReplyHeaders, replyIdentity } from "@/lib/mail-reply";
+import { buildSignedMessage, formatBrandedSender, validatePhotoUrl } from "@/lib/mail-identities";
 
 export const dynamic = "force-dynamic";
 
@@ -91,7 +92,8 @@ export async function GET(request: Request) {
       warnings.push((accounts[index] === "personal" ? "Personal" : "Vynalth AI") + " mail could not be loaded. Check its Resend configuration.");
     }
   });
-  return NextResponse.json({ items, warnings, accountStatus }, { headers: { "cache-control": "private, no-store" } });
+  const identitySettings = { personalPhotoUrl: validatePhotoUrl(process.env.MAIL_PROFILE_PHOTO_URL) };
+  return NextResponse.json({ items, warnings, accountStatus, identitySettings }, { headers: { "cache-control": "private, no-store" } });
 }
 
 export async function POST(request: Request) {
@@ -158,15 +160,19 @@ export async function POST(request: Request) {
     headers = safeReplyHeaders(originalHeaders.inReplyTo, originalHeaders.references);
   }
 
+  const content = body.includeSignature === true
+    ? buildSignedMessage({ from, text: typeof body.text === "string" ? body.text : "", html: typeof body.html === "string" ? body.html : undefined, personalPhotoUrl: process.env.MAIL_PROFILE_PHOTO_URL })
+    : { text: body.text || undefined, html: body.html || undefined };
+
   const { data, error } = await resend.emails.send({
-    from,
+    from: body.includeSignature === true ? formatBrandedSender(from) : from,
     to,
     cc: cc.length ? cc : undefined,
     bcc: bcc.length ? bcc : undefined,
     replyTo: replyTo.length ? replyTo : body.replySource ? [extractEmail(from)] : undefined,
     subject: body.subject || "(no subject)",
-    text: body.text || undefined,
-    html: body.html || undefined,
+    text: content.text || undefined,
+    html: content.html || undefined,
     attachments: [...clientAttachments, ...copiedAttachments].length
       ? [...clientAttachments, ...copiedAttachments]
       : undefined,

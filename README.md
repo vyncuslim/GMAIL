@@ -24,3 +24,7 @@ The server selects the provider from the sender for outbound messages and uses a
 Both company domains must pass Resend sending and receiving verification. In the `vynalthai.com` zone, the company subdomain MX must use the exact receiving host and priority shown in Resend. Do not overwrite existing personal DNS or web hosting records. The web app uses Resend's receiving API to list mail, so a webhook is not required for the current pull-based mailbox.
 
 After setting server environment variables, redeploy and test sending and receiving with each verified domain. Never expose or reuse the personal key for company mail.
+
+## Legacy SleepSomno migration
+
+Outgoing From, To, Cc, Bcc and Reply-To fields map exact `sleepsomno.com` addresses to `vynalthai.com` and exact `mail.sleepsomno.com` addresses to `mail.vynalthai.com`, preserving the local part. Other domains are untouched. This applies only to this webmail app and does not configure old-domain MX, inbound forwarding, third-party SMTP or historical mailbox migration. Configure the legacy domain's actual mail provider separately, retain legacy MX until the new routing is tested, and update any external application SMTP sender settings.

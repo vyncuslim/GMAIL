@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
-import { getResend, canAccessMailbox, decodeMailId, encodeMailId } from "@/lib/resend";
+import { getResend, canAccessMailbox, canAccessReceived, mailboxRecipients, decodeMailId, encodeMailId } from "@/lib/resend";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +33,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 
   const { data, error } = await resend.emails.receiving.get(ref.id);
   if (error) return NextResponse.json({ error: "Message unavailable" }, { status: 404 });
-  if (!data || !canAccessMailbox((data as any).to, ref.account)) {
+  if (!data || !canAccessReceived((data as any).to, ref.account)) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   const attachments = await resend.emails.receiving.attachments.list({ emailId: ref.id, limit: 100 });
@@ -41,6 +41,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     ...data,
       id: encodeMailId(ref.account, ref.id),
     direction: "inbox",
+    mailboxTo: mailboxRecipients((data as any).to, ref.account),
     attachments: attachments.data?.data || [],
   });
   } catch {

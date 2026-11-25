@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
-import { addressList, extractEmail, getResend, getMailAccount, resolveSender, canAccessMailbox, isVynalthConfigured, encodeMailId, decodeMailId, type MailAccount } from "@/lib/resend";
+import { addressList, migrateLegacyAddress, extractEmail, getResend, getMailAccount, resolveSender, canAccessMailbox, isVynalthConfigured, encodeMailId, decodeMailId, type MailAccount } from "@/lib/resend";
 
 export const dynamic = "force-dynamic";
 
@@ -94,10 +94,11 @@ export async function POST(request: Request) {
 
   const body = await request.json().catch(() => null);
   if (!body || typeof body !== "object") return NextResponse.json({ error: "Invalid mail request" }, { status: 400 });
-  const from = String(body.from || "").trim();
-  const to = addressList(body.to);
-  const cc = addressList(body.cc);
-  const bcc = addressList(body.bcc);
+  const from = migrateLegacyAddress(String(body.from || "").trim());
+  const to = addressList(body.to).map(migrateLegacyAddress);
+  const cc = addressList(body.cc).map(migrateLegacyAddress);
+  const bcc = addressList(body.bcc).map(migrateLegacyAddress);
+  const replyTo = addressList(body.replyTo).map(migrateLegacyAddress);
 
   const selectedAccount = getMailAccount(from);
   if (!selectedAccount) {
@@ -113,7 +114,7 @@ export async function POST(request: Request) {
   if (!to.length) {
     return NextResponse.json({ error: "Recipient required" }, { status: 400 });
   }
-  if ([...to, ...cc, ...bcc].some((email) => !extractEmail(email))) {
+  if ([...to, ...cc, ...bcc, ...replyTo].some((email) => !extractEmail(email))) {
     return NextResponse.json({ error: "Invalid recipient address" }, { status: 400 });
   }
   if (to.length + cc.length + bcc.length > 50) {
@@ -140,7 +141,7 @@ export async function POST(request: Request) {
     to,
     cc: cc.length ? cc : undefined,
     bcc: bcc.length ? bcc : undefined,
-    replyTo: body.replyTo || undefined,
+    replyTo: replyTo.length ? replyTo : undefined,
     subject: body.subject || "(no subject)",
     text: body.text || undefined,
     html: body.html || undefined,

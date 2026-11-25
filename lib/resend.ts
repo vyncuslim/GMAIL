@@ -1,5 +1,5 @@
 import { Resend } from "resend";
-import { getMailAccount, isAccountAddress, matchesVynalthMailbox, type MailAccount } from "./mail-domains";
+import { getMailAccount, isAccountAddress, matchesVynalthMailbox, migrateLegacyAddress, normalizeAddress, type MailAccount } from "./mail-domains";
 export * from "./mail-domains";
 
 export function getResend(account: MailAccount = "personal") {
@@ -16,6 +16,17 @@ export function isVynalthConfigured() {
 
 export function canAccessMailbox(value: unknown, account: MailAccount): boolean {
   return account === "personal" ? isAccountAddress(value, account) : isVynalthConfigured() && matchesVynalthMailbox(value, process.env.VYNALTH_MAILBOX_ADDRESSES || "");
+}
+
+// Preserve the original SMTP recipient and derive only authorized mailbox aliases.
+export function mailboxRecipients(value: unknown, account: MailAccount): string[] {
+  return Array.from(new Set(normalizeAddress(value)
+    .map((email) => account === "vynalth" ? migrateLegacyAddress(email) : email)
+    .filter((email) => canAccessMailbox(email, account))));
+}
+
+export function canAccessReceived(value: unknown, account: MailAccount): boolean {
+  return mailboxRecipients(value, account).length > 0;
 }
 
 export function resolveSender(from: string): MailAccount | null {

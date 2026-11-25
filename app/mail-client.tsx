@@ -33,6 +33,7 @@ type MailItem = {
   direction: Direction;
   from: any;
   to: any;
+  mailboxTo?: string[];
   subject: string;
   date: string;
 };
@@ -164,7 +165,7 @@ export default function MailClient() {
     return items.filter((item) => {
       const m = mailMeta(item);
       if (m.hidden) return false;
-      if (domainFilter !== "all" && !isDomainAddress(item.direction === "sent" ? item.from : item.to, domainFilter)) return false;
+      if (domainFilter !== "all" && !isDomainAddress(item.direction === "sent" ? item.from : item.mailboxTo || item.to, domainFilter)) return false;
       const ef = effectiveFolder(item);
       let show = false;
       if (labelFilter) show = (m.labels || []).includes(labelFilter) && ef !== "trash";
@@ -178,7 +179,7 @@ export default function MailClient() {
       else show = false;
       if (!show) return false;
       if (!needle) return true;
-      return JSON.stringify([item.from, item.to, item.subject]).toLowerCase().includes(needle);
+      return JSON.stringify([item.from, item.to, item.mailboxTo, item.subject]).toLowerCase().includes(needle);
     });
   }, [items, meta, folder, labelFilter, q, domainFilter]);
 
@@ -306,7 +307,7 @@ export default function MailClient() {
   const knownFromAddresses = useMemo(() => {
     const set = new Set<string>(["vyncus@vyncuslim.com", "hello@vyncuslim.com", "vyncus@mail.vyncuslim.com", "vyncuslim@vynalthai.com", "vyncuslim@mail.vynalthai.com", "hello@vynalthai.com", "support@vynalthai.com"]);
     for (const item of items) {
-      for (const addr of [...normalizeAddress(item.from), ...normalizeAddress(item.to)]) {
+      for (const addr of [...normalizeAddress(item.from), ...normalizeAddress(item.mailboxTo || item.to)]) {
         if (isAllowedSender(addr)) set.add(addr.toLowerCase());
       }
     }
@@ -514,8 +515,9 @@ function MessageCard({ message, onCompose }: any) {
   const [showRemoteImages, setShowRemoteImages] = useState(false);
   const fromAddr = address(message.from);
   const toAddr = address(message.to);
+  const mappedTo = address(message.mailboxTo);
   const messageAccount = decodeMailId(message.id)?.account;
-  const ownAddresses = normalizeAddress(message.direction === "sent" ? message.from : message.to);
+  const ownAddresses = normalizeAddress(message.direction === "sent" ? message.from : message.mailboxTo || message.to);
   const replyFrom = ownAddresses.find((email) => getMailAccount(email) === messageAccount) || "";
   const messageId = message.message_id || headerValue(message.headers, "message-id");
   const previousRefs = headerValue(message.headers, "references");
@@ -530,8 +532,8 @@ function MessageCard({ message, onCompose }: any) {
   function reply(all: boolean) {
     const from = replyFrom;
     const sender = normalizeAddress(message.direction === "sent" ? message.to : message.reply_to || message.from);
-    const originalTo = allAddresses(message.to);
-    const originalCc = allAddresses(message.cc);
+    const originalTo = normalizeAddress(message.to).map(migrateLegacyAddress);
+    const originalCc = normalizeAddress(message.cc).map(migrateLegacyAddress);
     const self = extractPlainEmail(from);
     const primary = new Set(sender.map((email) => email.toLowerCase()));
     const others = Array.from(new Set([...originalTo, ...originalCc].filter((x) => x.toLowerCase() !== self.toLowerCase() && !primary.has(x.toLowerCase()) && !isAllowedSender(x))));
@@ -566,6 +568,7 @@ function MessageCard({ message, onCompose }: any) {
       <div className="message-who">
         <b>{fromAddr}</b>
         <span>to {toAddr}{message.cc?.length ? `, cc ${address(message.cc)}` : ""}</span>
+        {mappedTo && mappedTo !== toAddr && <span>Vynalth mailbox: {mappedTo}</span>}
       </div>
       <time>{formatDate(message.received_at || message.created_at || message.date)}</time>
     </div>

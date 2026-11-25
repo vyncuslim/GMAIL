@@ -7,7 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     short_name: "Vyncuslim Mail",
     description: "Your private domain mailbox, with new-mail notifications.",
     lang: "en",
-    start_url: "/?source=pwa",
+    // Public, cookie-independent launch shell; the App ID remains stable.
+    start_url: "/install?launch=1",
     scope: "/",
     display: "standalone",
     background_color: "#f6f8fc",

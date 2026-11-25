@@ -44,6 +44,7 @@ export default async function Login({ searchParams }: LoginProps) {
           required
         />
         <button type="submit">Sign in</button>
+        <a href="/install" style={{color:"#0b57d0",fontSize:13}}>安装邮箱应用 / Install app</a>
         {message && <div className="error">{message}</div>}
       </form>
     </main>

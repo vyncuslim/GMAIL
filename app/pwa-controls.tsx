@@ -128,7 +128,7 @@ export default function PwaControls() {
       event.preventDefault();
       setInstallPrompt(event as InstallPrompt);
     };
-    const installedHandler = () => { setInstallPrompt(null); setInstalled(true); void refreshSetup(); };
+    const installedHandler = () => { setInstallPrompt(null); setInstalled(isInstalled()); setFeedback("浏览器已处理安装请求，请检查手机桌面是否出现邮箱图标。"); };
     const visibility = () => { if (document.visibilityState === "visible") void refreshSetup(); };
     const workerMessage = (event: MessageEvent) => {
       if (event.data?.type === "PUSH_SUBSCRIPTION_CHANGED") void refreshSetup();
@@ -256,7 +256,7 @@ export default function PwaControls() {
       await installPrompt.prompt();
       const result = await installPrompt.userChoice;
       setInstallPrompt(null);
-      setFeedback(result.outcome === "accepted" ? "安装请求已确认，请从应用图标打开邮箱。" : "已取消安装，之后仍可从浏览器菜单安装。");
+      setFeedback(result.outcome === "accepted" ? "安装请求已提交。若桌面没有图标，请打开安装诊断页检查。" : "已取消安装，之后仍可从浏览器菜单安装。");
     } catch { setInstallPrompt(null); setFeedback("请从浏览器菜单选择安装应用或添加到主屏幕。"); }
   }
 
@@ -294,6 +294,7 @@ export default function PwaControls() {
               <p>在 Chrome 或 Edge 的地址栏或菜单中选择“安装应用”。Mac 的 Safari 可选择“文件” →“添加到程序坞”。</p>
             )}
           </div>
+          <a href="/install" target="_blank" rel="noopener noreferrer" style={{display:"block",marginTop:10,color:"#0b57d0",fontSize:13}}>无法安装？打开安装诊断</a>
           <div className="pwa-section">
             <h2><Bell size={17} aria-hidden="true" />新邮件通知<span className={`pwa-status pwa-status-${phase}`}>{phase === "on" ? "已开启" : phase === "checking" ? "检查中" : "未开启"}</span></h2>
             <p>{descriptions[phase]}</p>

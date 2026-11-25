@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { makeSession, SESSION_COOKIE } from "@/lib/auth";
+import { loginDestination, safeMailReturn } from "@/lib/navigation";
 
 export const dynamic = "force-dynamic";
 
@@ -10,10 +11,10 @@ function noStoreJson(body: Record<string, unknown>, status = 200) {
   });
 }
 
-function redirectToLogin(request: Request, reason: string) {
-  const url = new URL("/login", request.url);
-  url.searchParams.set("error", reason);
-  return NextResponse.redirect(url, 303);
+function redirectToLogin(request: Request, reason: string, next: string) {
+  const response = NextResponse.redirect(new URL(loginDestination(next, reason), request.url), 303);
+  response.headers.set("cache-control", "no-store");
+  return response;
 }
 
 export async function POST(request: Request) {
@@ -22,24 +23,26 @@ export async function POST(request: Request) {
   const isForm = contentType.includes("application/x-www-form-urlencoded") ||
     contentType.includes("multipart/form-data");
 
-  if (!configured) {
-    return isForm
-      ? redirectToLogin(request, "config")
-      : noStoreJson({ error: "MAIL_APP_PASSWORD is not configured on Vercel." }, 503);
-  }
-
   let password = "";
+  let next = "/";
   if (isForm) {
     const form = await request.formData().catch(() => null);
     password = String(form?.get("password") || "");
+    next = safeMailReturn(form?.get("next"));
   } else {
     const body = await request.json().catch(() => ({}));
-    password = String((body as any).password || "");
+    password = String((body as Record<string, unknown>).password || "");
+  }
+
+  if (!configured) {
+    return isForm
+      ? redirectToLogin(request, "config", next)
+      : noStoreJson({ error: "MAIL_APP_PASSWORD is not configured on Vercel." }, 503);
   }
 
   if (password !== configured) {
     return isForm
-      ? redirectToLogin(request, "incorrect")
+      ? redirectToLogin(request, "incorrect", next)
       : noStoreJson({ error: "Incorrect password." }, 401);
   }
 
@@ -48,13 +51,14 @@ export async function POST(request: Request) {
     session = makeSession();
   } catch {
     return isForm
-      ? redirectToLogin(request, "session")
+      ? redirectToLogin(request, "session", next)
       : noStoreJson({ error: "SESSION_SECRET is not configured on Vercel." }, 503);
   }
 
   const response = isForm
-    ? NextResponse.redirect(new URL("/", request.url), 303)
+    ? NextResponse.redirect(new URL(next, request.url), 303)
     : noStoreJson({ ok: true });
+  response.headers.set("cache-control", "no-store");
 
   response.cookies.set(SESSION_COOKIE, session, {
     httpOnly: true,

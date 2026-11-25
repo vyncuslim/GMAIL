@@ -29,7 +29,10 @@ import { MAIL_DOMAINS, type MailDomain, isAllowedSender, isDomainAddress, normal
 
 import { buildReplyPlan, replyIdentity, sameThreadCandidate } from "@/lib/mail-reply";
 import { getMailIdentity, validatePhotoUrl } from "@/lib/mail-identities";
+import { disableCurrentDevicePush } from "@/lib/push-client";
+import { loginDestination, notificationDestination } from "@/lib/navigation";
 import MailAvatar, { MailIdentitySettingsContext } from "./mail-avatar";
+import PwaControls from "./pwa-controls";
 
 type Direction = "inbox" | "sent";
 type MailboxFilter = MailDomain | "all" | "sleepsomno.com";
@@ -92,15 +95,54 @@ export default function MailClient() {
   const [compose, setCompose] = useState<any>(false);
   const [q, setQ] = useState("");
   const [hydrated, setHydrated] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const loadPromiseRef = useRef<Promise<MailItem[] | undefined> | null>(null);
+  const notificationSequenceRef = useRef(0);
+  const threadSequenceRef = useRef(0);
+  const loadRef = useRef(load);
+  const notificationRef = useRef(openNotification);
+  loadRef.current = load;
+  notificationRef.current = openNotification;
 
   useEffect(() => {
+    let cancelled = false;
     try {
       setMeta(JSON.parse(localStorage.getItem(META_KEY) || "{}"));
       setDrafts(JSON.parse(localStorage.getItem(DRAFT_KEY) || "[]"));
       setLabels(JSON.parse(localStorage.getItem(LABEL_KEY) || "[]"));
     } catch {}
     setHydrated(true);
-    load();
+    void load().then((loaded) => {
+      if (!cancelled && loaded && new URL(window.location.href).searchParams.has("notification")) {
+        void notificationRef.current(window.location.href, loaded);
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    let needsRefresh = false;
+    const message = (event: MessageEvent) => {
+      if (event.data?.type === "MAIL_NOTIFICATION_CLICK" && typeof event.data.url === "string") {
+        void notificationRef.current(event.data.url);
+      } else if (event.data?.type === "MAIL_RECEIVED") {
+        if (document.visibilityState === "visible") void loadRef.current();
+        else needsRefresh = true;
+      }
+    };
+    const visible = () => {
+      if (needsRefresh && document.visibilityState === "visible") {
+        needsRefresh = false;
+        void loadRef.current();
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", message);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      navigator.serviceWorker.removeEventListener("message", message);
+      document.removeEventListener("visibilitychange", visible);
+    };
   }, []);
 
   useEffect(() => {
@@ -115,7 +157,17 @@ export default function MailClient() {
     if (hydrated) localStorage.setItem(LABEL_KEY, JSON.stringify(labels));
   }, [labels, hydrated]);
 
-  async function load() {
+  function load(): Promise<MailItem[] | undefined> {
+    if (loadPromiseRef.current) return loadPromiseRef.current;
+    const request = loadMailbox();
+    loadPromiseRef.current = request;
+    void request.finally(() => {
+      if (loadPromiseRef.current === request) loadPromiseRef.current = null;
+    });
+    return request;
+  }
+
+  async function loadMailbox(): Promise<MailItem[] | undefined> {
     setLoading(true);
     setLoadError("");
     try {
@@ -124,7 +176,7 @@ export default function MailClient() {
         fetch("/api/mail?folder=sent", { cache: "no-store" }),
       ]);
       if (inboxRes.status === 401 || sentRes.status === 401) {
-        location.href = "/login";
+        location.href = loginDestination(notificationDestination(new URLSearchParams(window.location.search).get("notification")));
         return;
       }
 
@@ -151,6 +203,7 @@ export default function MailClient() {
       setEnterpriseState(state === "connected" || state === "unconfigured" || state === "error" ? state : "error");
       const warnings = [...new Set([...(inboxJson.warnings || []), ...(sentJson.warnings || [])])];
       if (warnings.length) setLoadError(warnings.join(" · "));
+      return merged;
     } catch (error) {
       setEnterpriseState("error");
       console.error("[Vyncuslim Mail] Failed to load mailbox", error);
@@ -212,6 +265,7 @@ export default function MailClient() {
   }, [drafts, folder, labelFilter, q, domainFilter]);
 
   function setFolderView(next: Folder) {
+    ++threadSequenceRef.current;
     setFolder(next);
     setLabelFilter("");
     setThread(null);
@@ -273,9 +327,10 @@ export default function MailClient() {
     if (labelFilter === name) setLabelFilter("");
   }
 
-  async function openThread(item: MailItem) {
+  async function openThread(item: MailItem, sourceItems: MailItem[] = items) {
+    const sequence = ++threadSequenceRef.current;
     const account = decodeMailId(item.id)?.account;
-    const related = items
+    const related = sourceItems
       .filter((candidate) => !mailMeta(candidate).hidden && account && decodeMailId(candidate.id)?.account === account && sameThreadCandidate(item, candidate, account))
       .sort((a, b) => +new Date(a.date) - +new Date(b.date))
       .slice(-20);
@@ -291,7 +346,35 @@ export default function MailClient() {
         return { ...mail, ...detail, id: mail.id, direction: mail.direction };
       }),
     );
-    setThread({ subject: item.subject, loading: false, messages: details });
+    if (sequence === threadSequenceRef.current) setThread({ subject: item.subject, loading: false, messages: details });
+  }
+
+  async function openNotification(value: string, loadedItems?: MailItem[]) {
+    let url: URL;
+    try { url = new URL(value, window.location.origin); } catch { return; }
+    if (url.origin !== window.location.origin || url.pathname !== "/" || url.username || url.password) return;
+    const id = url.searchParams.get("notification");
+    if (id && (id.length > 160 || !decodeMailId(id))) return;
+    const sequence = ++notificationSequenceRef.current;
+    setFolderView("inbox");
+    setDomainFilter("all");
+    setQ("");
+    // Preserve a safe return target if loading discovers that the session has expired.
+    if (id) history.replaceState(history.state, "", `/?notification=${encodeURIComponent(id)}`);
+    const loaded = loadedItems || await load();
+    if (!loaded || sequence !== notificationSequenceRef.current) return;
+    const target = id && loaded.find((item) => item.direction === "inbox" && item.id === id && !mailMeta(item).hidden);
+    if (target) {
+      try { await openThread(target, loaded); }
+      catch { setLoadError("暂时无法打开这封邮件，请在收件箱中重试。"); }
+    } else if (id) {
+      setLoadError("收件箱已更新；这封邮件暂未出现在列表中，请稍后刷新。");
+    }
+    if (sequence === notificationSequenceRef.current) {
+      const current = new URL(window.location.href);
+      current.searchParams.delete("notification");
+      history.replaceState(history.state, "", `${current.pathname}${current.search}${current.hash}`);
+    }
   }
 
   function newCompose(initial: Partial<Draft> = {}) {
@@ -352,11 +435,23 @@ export default function MailClient() {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search mail" />
         </div>
         <button className="icon-btn" onClick={load} title="Refresh"><RefreshCw size={18} /></button>
+        <PwaControls />
         <button
           className="icon-btn"
+          disabled={signingOut}
           onClick={async () => {
-            await fetch("/api/auth/logout", { method: "POST" });
-            location.href = "/login";
+            setSigningOut(true);
+            let pushCleanupFailed = false;
+            try { await disableCurrentDevicePush(); }
+            catch { pushCleanupFailed = true; }
+            try {
+              const response = await fetch("/api/auth/logout", { method: "POST" });
+              if (!response.ok) throw new Error("Sign out failed. Please try again.");
+              location.href = pushCleanupFailed ? loginDestination("/", "notifications") : "/login";
+            } catch {
+              setLoadError("退出登录失败，请保持联网后重试。");
+              setSigningOut(false);
+            }
           }}
           title="Sign out"
         >

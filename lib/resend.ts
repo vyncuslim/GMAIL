@@ -27,5 +27,5 @@ export function addressList(value: unknown): string[] {
   if (!value) return [];
   if (Array.isArray(value)) return value.flatMap(addressList).filter(Boolean);
   if (typeof value !== "string") return [];
-  return value.split(",").map((v) => v.trim()).filter(Boolean);
+  return value.split(/[;,\n]/).map((v) => v.trim()).filter(Boolean);
 }

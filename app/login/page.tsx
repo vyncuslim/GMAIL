@@ -29,7 +29,7 @@ export default async function Login({ searchParams }: LoginProps) {
       <form className="login-card" method="POST" action="/api/auth/login">
         <div className="mail-mark">M</div>
         <h1>Vyncuslim Mail</h1>
-        <p>Private webmail · @vyncuslim.com · @mail.vyncuslim.com</p>
+        <p>Private webmail · Personal and Vynalth AI</p>
         <input
           type="password"
           name="password"

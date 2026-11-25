@@ -4,9 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "npm run test:reply && next build",
+    "build": "npm run test:reply && npm run test:identities && next build",
     "start": "next start",
-    "test:reply": "node scripts/test-reply.mjs"
+    "test:reply": "node scripts/test-reply.mjs",
+    "test:identities": "node scripts/test-identities.mjs"
   },
   "dependencies": {
     "next": "latest",

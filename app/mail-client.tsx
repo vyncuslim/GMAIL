@@ -25,7 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { MAIL_DOMAINS, type MailDomain, isAllowedSender, isDomainAddress, normalizeAddress, decodeMailId, getMailAccount, extractEmail } from "@/lib/mail-domains";
+import { MAIL_DOMAINS, type MailDomain, isAllowedSender, isDomainAddress, normalizeAddress, decodeMailId, getMailAccount, extractEmail, migrateLegacyAddress } from "@/lib/mail-domains";
 
 type Direction = "inbox" | "sent";
 type MailItem = {
@@ -610,7 +610,7 @@ function EmailBody({ html, text, allowRemoteImages }: any) {
 }
 
 function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
-  const [from, setFrom] = useState(initial.from || "");
+  const [from, setFrom] = useState(migrateLegacyAddress(initial.from || ""));
   const [to, setTo] = useState(initial.to || "");
   const [cc, setCc] = useState(initial.cc || "");
   const [bcc, setBcc] = useState(initial.bcc || "");
@@ -625,7 +625,7 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
   useEffect(() => {
     if (!initial.from) {
       const saved = localStorage.getItem(LAST_FROM_KEY);
-      if (saved) setFrom(saved);
+      if (saved) setFrom(migrateLegacyAddress(saved));
     }
   }, [initial.from]);
 
@@ -654,13 +654,14 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
     setSending(true);
     setError("");
     try {
-      if (!isAllowedSender(from)) {
+      const migratedFrom = migrateLegacyAddress(from);
+      if (!isAllowedSender(migratedFrom)) {
         throw new Error("From must use one of your four supported personal or Vynalth AI domains.");
       }
 
-      const toAddresses = splitAddressInput(to);
-      const ccAddresses = splitAddressInput(cc);
-      const bccAddresses = splitAddressInput(bcc);
+      const toAddresses = splitAddressInput(to).map(migrateLegacyAddress);
+      const ccAddresses = splitAddressInput(cc).map(migrateLegacyAddress);
+      const bccAddresses = splitAddressInput(bcc).map(migrateLegacyAddress);
       if (!toAddresses.length) {
         throw new Error("Add at least one recipient.");
       }
@@ -680,10 +681,10 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          from,
-          to,
-          cc,
-          bcc,
+          from: migratedFrom,
+          to: toAddresses,
+          cc: ccAddresses,
+          bcc: bccAddresses,
           subject,
           text,
           attachments,
@@ -695,7 +696,7 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
       });
       const json = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(json.error || "Send failed");
-      localStorage.setItem(LAST_FROM_KEY, extractPlainEmail(from));
+      localStorage.setItem(LAST_FROM_KEY, extractPlainEmail(migratedFrom));
       sent();
     } catch (err: any) {
       setError(err.message || "Send failed");
@@ -716,6 +717,9 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
     <div className="compose-fields">
       <label><span>From</span><input list="from-addresses" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="you@vyncuslim.com or you@vynalthai.com" autoComplete="email" /></label>
       <datalist id="from-addresses">{knownFrom.map((a: string) => <option value={a} key={a} />)}</datalist>
+      {[from, ...splitAddressInput(to), ...splitAddressInput(cc), ...splitAddressInput(bcc)].some((value) => migrateLegacyAddress(value) !== value) && (
+        <p role="status" style={{ margin: "6px 12px", fontSize: 12 }}>Legacy sleepsomno addresses will be converted to their matching Vynalth AI addresses before sending.</p>
+      )}
       <label><span>To</span><input value={to} onChange={(e) => setTo(e.target.value)} placeholder="recipient@example.com" autoComplete="email" /></label>
       <label><span>Cc</span><input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="Optional, comma separated" /></label>
       <label><span>Bcc</span><input value={bcc} onChange={(e) => setBcc(e.target.value)} placeholder="Optional, comma separated" /></label>

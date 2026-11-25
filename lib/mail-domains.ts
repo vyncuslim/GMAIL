@@ -79,7 +79,7 @@ export function migrateLegacyAddress(value: string): string {
   const email = extractEmail(value);
   if (!email) return value;
   const [local, domain] = email.split("@");
-  if (domain === "sleepsomno.com") return local + "@vynalthai.com";
+  if (["sleepsomno.com", "www.sleepsomno.com", "vitashield.sleepsomno.com"].includes(domain)) return local + "@vynalthai.com";
   if (domain === "mail.sleepsomno.com") return local + "@mail.vynalthai.com";
   return value;
 }

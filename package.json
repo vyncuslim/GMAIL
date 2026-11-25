@@ -4,10 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "npm run test:reply && npm run test:identities && next build",
+    "build": "npm run test:reply && npm run test:identities && npm run test:navigation && next build",
     "start": "next start",
     "test:reply": "node scripts/test-reply.mjs",
-    "test:identities": "node scripts/test-identities.mjs"
+    "test:identities": "node scripts/test-identities.mjs",
+    "test:navigation": "node scripts/test-navigation.mjs"
   },
   "dependencies": {
     "next": "latest",

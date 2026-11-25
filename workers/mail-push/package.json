@@ -1,0 +1,18 @@
+{
+  "name": "vyncuslim-mail-push",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test --test-concurrency=1 test/*.test.mjs"
+  },
+  "dependencies": {
+    "svix": "2.11.1",
+    "web-push": "4.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "miniflare": "4.20260730.0"
+  }
+}

@@ -21,7 +21,7 @@ The server selects the provider from the sender for outbound messages and uses a
 
 ## DNS
 
-Both company domains must pass Resend sending and receiving verification. In the `vynalthai.com` zone, the company subdomain MX must use the exact receiving host and priority shown in Resend. Do not overwrite existing personal DNS or web hosting records. The web app uses Resend's receiving API to list mail, so a webhook is not required for the current pull-based mailbox.
+Both company domains must pass Resend sending and receiving verification. In the `vynalthai.com` zone, the company subdomain MX must use the exact receiving host and priority shown in Resend. Do not overwrite existing personal DNS or web hosting records. The web app reads mail through Resend's receiving API. Background notifications additionally use the two signed `email.received` webhooks described below; they do not change MX or move mail storage.
 
 After setting server environment variables, redeploy and test sending and receiving with each verified domain. Never expose or reuse the personal key for company mail.
 
@@ -40,3 +40,23 @@ New messages and replies offer an **Include logo / photo signature** checkbox wi
 These images affect this webmail and the message body. Gmail and other recipients control their inbox avatar display separately. BIMI requires the receiving provider's authentication and certificate requirements; this change does not create a BIMI record or claim external verification.
 
 Asset provenance: `public/brand/vynalth-logo.svg` is the existing symbol from `vyncuslim/SomnoAI-Digital-Sleep-Lab`, commit `4c4c914df795d5c3d1e7d11ce88c86430e5d62ce`, `public/media/vynalth-mark.svg`. Its PNG is a format conversion with identical artwork. Personal photographs are not stored in this repository. External images remain subject to the receiving email client's image loading and format support.
+
+## Installable app and background notifications
+
+Open the mailbox, sign in, and choose **安装与通知**. Install the app using the offered browser action. On iPhone and iPad (iOS/iPadOS 16.4 or later), use Safari's Share → Add to Home Screen, then open that installed app before enabling notifications. Permission is requested only when the owner presses **开启此设备通知**; each browser or installed app needs its own permission and subscription.
+
+The browser service worker receives standard encrypted Web Push even when no mailbox tab is open, subject to browser and operating-system support, notification permissions, connectivity, power management and Focus settings. Closing a tab is supported; delivery while the entire browser is force-quit is not guaranteed. No web app can override these system controls. A successful test response means the push service accepted the request, not that the device displayed it.
+
+Notifications intentionally show a generic new-mail message. Sender, recipient, subject and body are not sent to the lock-screen notification. Tapping a notification opens its account-scoped message, preserving that destination through password login when necessary. The service worker caches only the public offline page and app icons; it does not store mailbox HTML, API responses, attachments, credentials or email bodies. Offline mode provides a reconnect screen, not an offline copy of private mail.
+
+### Push backend
+
+The separately deployed Cloudflare Worker in `workers/mail-push` uses a dedicated D1 database. The exact route `mail.vyncuslim.com/api/notifications/*` serves authenticated device registration, status, removal and explicit test requests. It verifies the existing private session through the fixed `/api/auth/status` endpoint and requires the mailbox origin on browser mutation requests. No new Vercel secret is needed.
+
+Each Resend account has its own `email.received` webhook and signing secret. The Worker verifies the raw request signature, filters supported receiving domains, freezes the eligible devices when it first records an event, and tracks delivery per device. Retries resume unfinished deliveries without intentionally resending successful ones. Expired subscriptions are removed. Like other network notification systems, a crash between push-provider acceptance and the database update can still cause a duplicate; a stable notification tag replaces that message's existing alert where supported.
+
+Keep the VAPID private key and both webhook signing secrets exclusively in Cloudflare secret bindings. Keep the VAPID pair stable across deployments; rotating the key requires devices to subscribe again. D1 stores push subscription endpoints and encryption keys as sensitive delivery credentials, but no email content. Do not commit database exports or log subscription endpoints. See the backend README for bindings, schema, verification and build instructions.
+
+Disabling notifications removes this device's server subscription and browser subscription. Logging out attempts the same cleanup. If a device is offline during cleanup, revoke the site's notification permission in its browser settings; the UI reports cleanup failures. Uninstalling an app is not a server-side deletion signal, so stale subscriptions are also removed when their push provider rejects delivery.
+
+App icons use the existing envelope motif, rendered into the sizes required by the manifest and home screen. They contain no private photograph.

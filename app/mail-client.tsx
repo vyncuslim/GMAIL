@@ -27,6 +27,8 @@ import {
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { MAIL_DOMAINS, type MailDomain, isAllowedSender, isDomainAddress, normalizeAddress, decodeMailId, getMailAccount, extractEmail, migrateLegacyAddress } from "@/lib/mail-domains";
 
+import { buildReplyPlan, replyIdentity, sameThreadCandidate } from "@/lib/mail-reply";
+
 type Direction = "inbox" | "sent";
 type MailboxFilter = MailDomain | "all" | "sleepsomno.com";
 type AccountState = "connected" | "unconfigured" | "error" | "checking";
@@ -37,6 +39,7 @@ type MailItem = {
   from: any;
   to: any;
   mailboxTo?: string[];
+  message_id?: string;
   subject: string;
   date: string;
 };
@@ -58,6 +61,8 @@ type Draft = {
   updatedAt: string;
   inReplyTo?: string;
   references?: string;
+  replyMode?: "reply" | "replyAll";
+  replySource?: { id: string; direction: Direction };
   copyAttachmentsFrom?: { id: string; direction: Direction };
 };
 type Folder = "inbox" | "starred" | "sent" | "drafts" | "archive" | "spam" | "trash" | "all";
@@ -264,9 +269,9 @@ export default function MailClient() {
   }
 
   async function openThread(item: MailItem) {
-    const subject = normalizeSubject(item.subject);
+    const account = decodeMailId(item.id)?.account;
     const related = items
-      .filter((candidate) => !mailMeta(candidate).hidden && decodeMailId(candidate.id)?.account === decodeMailId(item.id)?.account && normalizeSubject(candidate.subject) === subject)
+      .filter((candidate) => !mailMeta(candidate).hidden && account && decodeMailId(candidate.id)?.account === account && sameThreadCandidate(item, candidate, account))
       .sort((a, b) => +new Date(a.date) - +new Date(b.date))
       .slice(-20);
 
@@ -277,7 +282,7 @@ export default function MailClient() {
       related.map(async (mail) => {
         const response = await fetch(`/api/mail/${mail.id}?direction=${mail.direction}`, { cache: "no-store" });
         const detail = await response.json();
-        if (!response.ok) return { ...mail, text: detail.error || "Message unavailable" };
+        if (!response.ok) return { ...mail, unavailable: true, text: detail.error || "Message unavailable" };
         return { ...mail, ...detail, id: mail.id, direction: mail.direction };
       }),
     );
@@ -296,6 +301,8 @@ export default function MailClient() {
       text: initial.text || "",
       inReplyTo: initial.inReplyTo,
       references: initial.references,
+      replyMode: initial.replyMode,
+      replySource: initial.replySource,
       copyAttachmentsFrom: initial.copyAttachmentsFrom,
     });
   }
@@ -484,6 +491,7 @@ export default function MailClient() {
 
       {compose && (
         <Composer
+          key={compose.id}
           initial={compose}
           knownFrom={knownFromAddresses}
           onSave={saveDraft}
@@ -528,11 +536,8 @@ function MessageCard({ message, onCompose }: any) {
   const toAddr = address(message.to);
   const mappedTo = address(message.mailboxTo);
   const messageAccount = decodeMailId(message.id)?.account;
-  const ownAddresses = normalizeAddress(message.direction === "sent" ? message.from : message.mailboxTo || message.to);
-  const replyFrom = ownAddresses.find((email) => getMailAccount(email) === messageAccount) || "";
-  const messageId = message.message_id || headerValue(message.headers, "message-id");
-  const previousRefs = headerValue(message.headers, "references");
-  const references = [previousRefs, messageId].filter(Boolean).join(" ");
+  const replyFrom = messageAccount ? replyIdentity(message, messageAccount)[0] || "" : "";
+  const canReply = Boolean(messageAccount && !message.unavailable && buildReplyPlan(message, messageAccount, false).canReply);
   const externalImages = typeof message.html === "string" && /<img[^>]+src=["']https?:\/\//i.test(message.html);
 
   function quote() {
@@ -541,22 +546,19 @@ function MessageCard({ message, onCompose }: any) {
   }
 
   function reply(all: boolean) {
-    const from = replyFrom;
-    const sender = normalizeAddress(message.direction === "sent" ? message.to : message.reply_to || message.from);
-    const originalTo = normalizeAddress(message.to).map(migrateLegacyAddress);
-    const originalCc = normalizeAddress(message.cc).map(migrateLegacyAddress);
-    const self = extractPlainEmail(from);
-    const primary = new Set(sender.map((email) => email.toLowerCase()));
-    const others = Array.from(new Set([...originalTo, ...originalCc].filter((x) => x.toLowerCase() !== self.toLowerCase() && !primary.has(x.toLowerCase()) && !isAllowedSender(x))));
+    if (!messageAccount || !canReply) return;
+    const plan = buildReplyPlan(message, messageAccount, all);
     onCompose({
-      from,
-      to: sender.join(", "),
-      cc: all ? others.join(", ") : "",
+      from: plan.from,
+      to: plan.to.join(", "),
+      cc: plan.cc.join(", "),
       bcc: "",
       subject: prefixSubject(message.subject, "Re:"),
       text: quote(),
-      inReplyTo: messageId,
-      references,
+      inReplyTo: plan.inReplyTo,
+      references: plan.references,
+      replyMode: all ? "replyAll" : "reply",
+      replySource: { id: message.id, direction: message.direction },
     });
   }
 
@@ -608,9 +610,10 @@ function MessageCard({ message, onCompose }: any) {
     )}
 
     <div className="message-actions">
-      <button onClick={() => reply(false)}><Reply size={17} />Reply</button>
-      <button onClick={() => reply(true)}><ReplyAll size={17} />Reply all</button>
-      <button onClick={forward}><Forward size={17} />Forward</button>
+      <button disabled={!canReply} onClick={() => reply(false)}><Reply size={17} />Reply</button>
+      <button disabled={!canReply} onClick={() => reply(true)}><ReplyAll size={17} />Reply all</button>
+      <button disabled={!replyFrom || message.unavailable} onClick={forward}><Forward size={17} />Forward</button>
+      {!canReply && <small role="status">No authorized reply address or recipient is available for this message.</small>}
     </div>
   </article>;
 }
@@ -635,6 +638,12 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const saveTimer = useRef<any>(null);
+  const inFlight = useRef(false);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const isReply = Boolean(initial.replySource || initial.inReplyTo);
+  useEffect(() => {
+    if (isReply) { bodyRef.current?.focus(); bodyRef.current?.setSelectionRange(0, 0); }
+  }, [isReply]);
 
   useEffect(() => {
     if (!initial.from) {
@@ -643,28 +652,21 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
     }
   }, [initial.from]);
 
+  function saveNow() {
+    clearTimeout(saveTimer.current);
+    onSave({ id: initial.id, from, to, cc, bcc, subject, text, updatedAt: new Date().toISOString(), inReplyTo: initial.inReplyTo, references: initial.references, replyMode: initial.replyMode, replySource: initial.replySource, copyAttachmentsFrom: initial.copyAttachmentsFrom });
+  }
   useEffect(() => {
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      onSave({
-        id: initial.id,
-        from,
-        to,
-        cc,
-        bcc,
-        subject,
-        text,
-        updatedAt: new Date().toISOString(),
-        inReplyTo: initial.inReplyTo,
-        references: initial.references,
-        copyAttachmentsFrom: initial.copyAttachmentsFrom,
-      });
-    }, 500);
+    saveTimer.current = setTimeout(() => { if (!inFlight.current) saveNow(); }, 500);
     return () => clearTimeout(saveTimer.current);
   }, [from, to, cc, bcc, subject, text]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (inFlight.current) return;
+    inFlight.current = true;
+    clearTimeout(saveTimer.current);
     setSending(true);
     setError("");
     try {
@@ -705,31 +707,34 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
           scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
           inReplyTo: initial.inReplyTo,
           references: initial.references,
+          replySource: initial.replySource,
           copyAttachmentsFrom: initial.copyAttachmentsFrom,
         }),
       });
       const json = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(json.error || "Send failed");
+      if (!response.ok || !json.ok) throw new Error(json.error || "Send failed");
       localStorage.setItem(LAST_FROM_KEY, extractPlainEmail(migratedFrom));
       sent();
     } catch (err: any) {
       setError(err.message || "Send failed");
+      saveNow();
     } finally {
+      inFlight.current = false;
       setSending(false);
     }
   }
 
   return <form className="composer" onSubmit={submit} noValidate>
     <div className="composer-head">
-      <strong>{initial.inReplyTo ? "Reply" : initial.copyAttachmentsFrom ? "Forward" : "New message"}</strong>
+      <strong>{initial.replyMode === "replyAll" ? "Reply all" : isReply ? "Reply" : initial.copyAttachmentsFrom ? "Forward" : "New message"}</strong>
       <div>
-        <button type="button" title="Discard" onClick={() => onDiscard(initial.id)}><Trash2 size={17} /></button>
-        <button type="button" title="Close and save draft" onClick={close}><X size={18} /></button>
+        <button type="button" disabled={sending} title="Discard" onClick={() => { clearTimeout(saveTimer.current); onDiscard(initial.id); }}><Trash2 size={17} /></button>
+        <button type="button" disabled={sending} title="Close and save draft" onClick={() => { saveNow(); close(); }}><X size={18} /></button>
       </div>
     </div>
 
     <div className="compose-fields">
-      <label><span>From</span><input list="from-addresses" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="you@vyncuslim.com or you@vynalthai.com" autoComplete="email" /></label>
+      <label><span>From</span><input list="from-addresses" value={from} readOnly={Boolean(initial.replySource)} onChange={(e) => setFrom(e.target.value)} placeholder="you@vyncuslim.com or you@vynalthai.com" autoComplete="email" /></label>
       <datalist id="from-addresses">{knownFrom.map((a: string) => <option value={a} key={a} />)}</datalist>
       {[from, ...splitAddressInput(to), ...splitAddressInput(cc), ...splitAddressInput(bcc)].some((value) => migrateLegacyAddress(value) !== value) && (
         <p role="status" style={{ margin: "6px 12px", fontSize: 12 }}>Legacy sleepsomno addresses will be converted to their matching Vynalth AI addresses before sending.</p>
@@ -740,7 +745,7 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
       <input className="subject-input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" />
     </div>
 
-    <textarea className="compose-body" value={text} onChange={(e) => setText(e.target.value)} placeholder="Write a message…" />
+    <textarea ref={bodyRef} className="compose-body" value={text} onChange={(e) => setText(e.target.value)} placeholder="Write a message…" />
 
     {!!files.length && <div className="compose-files">{files.map((f, i) => (
       <span key={`${f.name}-${i}`}><Paperclip size={13} />{f.name}<button type="button" onClick={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}>×</button></span>
@@ -753,7 +758,7 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
     </div>
 
     <div className="composer-foot">
-      <button className="send-btn" disabled={sending}>{sending ? "Sending…" : scheduledAt ? "Schedule send" : "Send"}</button>
+      <button className="send-btn" disabled={sending}>{sending ? "Sending…" : scheduledAt ? "Schedule send" : isReply ? "Send reply" : "Send"}</button>
       <label className="attach-btn" title="Attach files">
         <Paperclip size={18} />
         <input type="file" multiple hidden onChange={(e) => setFiles((prev) => [...prev, ...Array.from(e.target.files || [])].slice(0, 20))} />

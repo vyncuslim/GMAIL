@@ -72,3 +72,14 @@ export function matchesVynalthMailbox(value: unknown, rules: string): boolean {
     return allowed.has(email) || allowed.has("*@" + getMailDomain(email));
   });
 }
+
+// Legacy addresses may be entered by the owner, but the application never sends
+// from the legacy domains. This does not implement SMTP/DNS inbound forwarding.
+export function migrateLegacyAddress(value: string): string {
+  const email = extractEmail(value);
+  if (!email) return value;
+  const [local, domain] = email.split("@");
+  if (domain === "sleepsomno.com") return local + "@vynalthai.com";
+  if (domain === "mail.sleepsomno.com") return local + "@mail.vynalthai.com";
+  return value;
+}

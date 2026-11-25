@@ -25,7 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { MAIL_DOMAINS, type MailDomain, isAllowedSender, isDomainAddress, normalizeAddress, decodeMailId } from "@/lib/mail-domains";
+import { MAIL_DOMAINS, type MailDomain, isAllowedSender, isDomainAddress, normalizeAddress, decodeMailId, getMailAccount, extractEmail } from "@/lib/mail-domains";
 
 type Direction = "inbox" | "sent";
 type MailItem = {
@@ -514,7 +514,9 @@ function MessageCard({ message, onCompose }: any) {
   const [showRemoteImages, setShowRemoteImages] = useState(false);
   const fromAddr = address(message.from);
   const toAddr = address(message.to);
-  const replyFrom = (message.direction === "sent" ? firstVyncuslimAddress(message.from) : firstVyncuslimAddress(message.to)) || firstVyncuslimAddress(message.from) || firstVyncuslimAddress(message.to) || (typeof window !== "undefined" ? localStorage.getItem(LAST_FROM_KEY) : "") || "";
+  const messageAccount = decodeMailId(message.id)?.account;
+  const ownAddresses = normalizeAddress(message.direction === "sent" ? message.from : message.to);
+  const replyFrom = ownAddresses.find((email) => getMailAccount(email) === messageAccount) || "";
   const messageId = message.message_id || headerValue(message.headers, "message-id");
   const previousRefs = headerValue(message.headers, "references");
   const references = [previousRefs, messageId].filter(Boolean).join(" ");
@@ -527,11 +529,12 @@ function MessageCard({ message, onCompose }: any) {
 
   function reply(all: boolean) {
     const from = replyFrom;
-    const sender = message.direction === "sent" ? allAddresses(message.to) : allAddresses(message.reply_to || message.from);
+    const sender = normalizeAddress(message.direction === "sent" ? message.to : message.reply_to || message.from);
     const originalTo = allAddresses(message.to);
     const originalCc = allAddresses(message.cc);
     const self = extractPlainEmail(from);
-    const others = Array.from(new Set([...originalTo, ...originalCc].filter((x) => x.toLowerCase() !== self.toLowerCase() && !isAllowedSender(x))));
+    const primary = new Set(sender.map((email) => email.toLowerCase()));
+    const others = Array.from(new Set([...originalTo, ...originalCc].filter((x) => x.toLowerCase() !== self.toLowerCase() && !primary.has(x.toLowerCase()) && !isAllowedSender(x))));
     onCompose({
       from,
       to: sender.join(", "),
@@ -662,7 +665,7 @@ function Composer({ initial, knownFrom, onSave, onDiscard, close, sent }: any) {
         throw new Error("Add at least one recipient.");
       }
       const invalidRecipient = [...toAddresses, ...ccAddresses, ...bccAddresses].find(
-        (value) => !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(extractPlainEmail(value)),
+        (value) => !extractEmail(value),
       );
       if (invalidRecipient) {
         throw new Error(`Invalid recipient address: ${invalidRecipient}`);
@@ -769,19 +772,15 @@ function allAddresses(v: any): string[] {
   return v.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
 }
 
-function firstVyncuslimAddress(v: any) {
-  return normalizeAddress(v).find(isAllowedSender) || "";
-}
-
 function splitAddressInput(value: string) {
   return value
-    .split(/[;,\\n]/)
+    .split(/[;,\n]/)
     .map((part) => part.trim())
     .filter(Boolean);
 }
 
 function extractPlainEmail(v: string) {
-  return allAddresses(v)[0] || v.trim();
+  return extractEmail(v);
 }
 
 function normalizeSubject(s: string) {

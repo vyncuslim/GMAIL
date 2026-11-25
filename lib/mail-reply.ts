@@ -81,7 +81,7 @@ export function messageIds(value: unknown): string[] {
   const unfolded = value.replace(/\r?\n[ \t]+/g, " ").trim();
   if (/[\r\n]/.test(unfolded)) return [];
   const pattern = /<[^<>\s@]+@[^<>\s@]+>/g;
-  const ids = unfolded.match(pattern) || [];
+  const ids: string[] = unfolded.match(pattern) || [];
   if (!ids.length && /^[^<>\s@]+@[^<>\s@]+$/.test(unfolded)) ids.push("<" + unfolded + ">");
   return [...new Set(ids.filter((id) => id.length <= 320))];
 }

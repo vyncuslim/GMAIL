@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
 import { addressList, migrateLegacyAddress, extractEmail, getResend, getMailAccount, resolveSender, canAccessMailbox, canAccessReceived, mailboxRecipients, isVynalthConfigured, encodeMailId, decodeMailId, type MailAccount } from "@/lib/resend";
 
+import { makeReplyHeaders, safeReplyHeaders, replyIdentity } from "@/lib/mail-reply";
+
 export const dynamic = "force-dynamic";
 
 async function copyProviderAttachments(
@@ -16,13 +18,13 @@ async function copyProviderAttachments(
     const message = await resend.emails.get(ref.id);
     if (message.error || !message.data || !canAccessMailbox((message.data as any).from, ref.account)) throw new Error("Attachment source is unavailable.");
     const listed = await resend.emails.attachments.list({ emailId: ref.id, limit: 100 });
-    if (listed.error) return [];
+    if (listed.error) throw new Error("Original attachments could not be listed.");
     const copied = [];
     for (const item of listed.data?.data || []) {
       const detail = await resend.emails.attachments.get({ emailId: ref.id, id: item.id });
-      if (!detail.data?.download_url) continue;
+      if (detail.error || !detail.data?.download_url) throw new Error("Original attachment unavailable.");
       const response = await fetch(detail.data.download_url);
-      if (!response.ok) continue;
+      if (!response.ok) throw new Error("Original attachment download failed.");
       copied.push({
         filename: detail.data.filename || "attachment",
         content: Buffer.from(await response.arrayBuffer()),
@@ -35,13 +37,13 @@ async function copyProviderAttachments(
   const message = await resend.emails.receiving.get(ref.id);
   if (message.error || !message.data || !canAccessReceived((message.data as any).to, ref.account)) throw new Error("Attachment source is unavailable.");
   const listed = await resend.emails.receiving.attachments.list({ emailId: ref.id, limit: 100 });
-  if (listed.error) return [];
+  if (listed.error) throw new Error("Original attachments could not be listed.");
   const copied = [];
   for (const item of listed.data?.data || []) {
     const detail = await resend.emails.receiving.attachments.get({ emailId: ref.id, id: item.id });
-    if (!detail.data?.download_url) continue;
+    if (detail.error || !detail.data?.download_url) throw new Error("Original attachment unavailable.");
     const response = await fetch(detail.data.download_url);
-    if (!response.ok) continue;
+    if (!response.ok) throw new Error("Original attachment download failed.");
     copied.push({
       filename: detail.data.filename || "attachment",
       content: Buffer.from(await response.arrayBuffer()),
@@ -65,6 +67,8 @@ async function listAccount(account: MailAccount, folder: "inbox" | "sent") {
       from: message.from,
       to: message.to,
       mailboxTo: folder === "inbox" ? mailboxRecipients(message.to, account) : undefined,
+      message_id: message.message_id,
+      cc: message.cc,
       subject: message.subject || "(no subject)",
       date: message.created_at,
     }));
@@ -135,16 +139,31 @@ export async function POST(request: Request) {
   try {
   const resend = getResend(account);
   const copiedAttachments = await copyProviderAttachments(body.copyAttachmentsFrom);
-  const headers: Record<string, string> = {};
-  if (body.inReplyTo) headers["In-Reply-To"] = String(body.inReplyTo);
-  if (body.references) headers["References"] = String(body.references);
+  let headers = safeReplyHeaders(body.inReplyTo, body.references);
+  if (body.replySource) {
+    const ref = decodeMailId(body.replySource.id);
+    const direction = body.replySource.direction;
+    if (!ref || ref.account !== account || (direction !== "inbox" && direction !== "sent")) {
+      return NextResponse.json({ error: "The reply must use the original authorized mail account." }, { status: 400 });
+    }
+    const original = direction === "sent" ? await resend.emails.get(ref.id) : await resend.emails.receiving.get(ref.id);
+    if (original.error || !original.data) return NextResponse.json({ error: "Original message unavailable. Reopen the message before replying." }, { status: 404 });
+    const message = original.data as any;
+    const permitted = direction === "sent" ? canAccessMailbox(message.from, account) : canAccessReceived(message.to, account);
+    const originalIdentities = replyIdentity({ ...message, direction, mailboxTo: direction === "inbox" ? mailboxRecipients(message.to, account) : undefined }, account);
+    if (!permitted || !originalIdentities.includes(extractEmail(from))) {
+      return NextResponse.json({ error: "This sender is not authorized to reply to the original message." }, { status: 403 });
+    }
+    const originalHeaders = makeReplyHeaders(message);
+    headers = safeReplyHeaders(originalHeaders.inReplyTo, originalHeaders.references);
+  }
 
   const { data, error } = await resend.emails.send({
     from,
     to,
     cc: cc.length ? cc : undefined,
     bcc: bcc.length ? bcc : undefined,
-    replyTo: replyTo.length ? replyTo : undefined,
+    replyTo: replyTo.length ? replyTo : body.replySource ? [extractEmail(from)] : undefined,
     subject: body.subject || "(no subject)",
     text: body.text || undefined,
     html: body.html || undefined,

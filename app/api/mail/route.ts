@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
-import { addressList, getResend, getMailAccount, resolveSender, canAccessMailbox, isVynalthConfigured, encodeMailId, decodeMailId, type MailAccount } from "@/lib/resend";
+import { addressList, extractEmail, getResend, getMailAccount, resolveSender, canAccessMailbox, isVynalthConfigured, encodeMailId, decodeMailId, type MailAccount } from "@/lib/resend";
 
 export const dynamic = "force-dynamic";
 
@@ -92,7 +92,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await request.json();
+  const body = await request.json().catch(() => null);
+  if (!body || typeof body !== "object") return NextResponse.json({ error: "Invalid mail request" }, { status: 400 });
   const from = String(body.from || "").trim();
   const to = addressList(body.to);
   const cc = addressList(body.cc);
@@ -111,6 +112,9 @@ export async function POST(request: Request) {
   }
   if (!to.length) {
     return NextResponse.json({ error: "Recipient required" }, { status: 400 });
+  }
+  if ([...to, ...cc, ...bcc].some((email) => !extractEmail(email))) {
+    return NextResponse.json({ error: "Invalid recipient address" }, { status: 400 });
   }
   if (to.length + cc.length + bcc.length > 50) {
     return NextResponse.json({ error: "Maximum 50 recipients per email" }, { status: 400 });

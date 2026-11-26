@@ -4,6 +4,11 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        // Applies to message bodies, attachment redirects and Mail API errors as well as the list.
+        source: "/api/mail/:path*",
+        headers: [{ key: "Cache-Control", value: "private, no-store" }],
+      },
+      {
         source: "/sw.js",
         headers: [
           { key: "Content-Type", value: "application/javascript; charset=utf-8" },

@@ -264,11 +264,16 @@ export default function MailClient() {
       .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
   }, [drafts, folder, labelFilter, q, domainFilter]);
 
+  function closeThread() {
+    ++threadSequenceRef.current;
+    setThread(null);
+  }
+
   function setFolderView(next: Folder) {
     ++threadSequenceRef.current;
     setFolder(next);
     setLabelFilter("");
-    setThread(null);
+    closeThread();
     setSelectedKeys(new Set());
   }
 
@@ -338,15 +343,28 @@ export default function MailClient() {
     patchItems(related.filter((i) => i.direction === "inbox"), { read: true });
     setThread({ subject: item.subject, loading: true, messages: [] });
 
-    const details = await Promise.all(
-      related.map(async (mail) => {
-        const response = await fetch(`/api/mail/${mail.id}?direction=${mail.direction}`, { cache: "no-store" });
-        const detail = await response.json();
-        if (!response.ok) return { ...mail, unavailable: true, text: detail.error || "Message unavailable" };
-        return { ...mail, ...detail, id: mail.id, direction: mail.direction };
-      }),
-    );
-    if (sequence === threadSequenceRef.current) setThread({ subject: item.subject, loading: false, messages: details });
+    try {
+      const details = await Promise.all(
+        related.map(async (mail) => {
+          const response = await fetch(`/api/mail/${mail.id}?direction=${mail.direction}`, { cache: "no-store" });
+          const detail = await response.json().catch(() => null);
+          if (!response.ok) return { ...mail, unavailable: true, text: detail?.error || "Message unavailable" };
+          if (!detail || typeof detail !== "object" || Array.isArray(detail)) throw new Error("Invalid message response");
+          return { ...mail, ...detail, id: mail.id, direction: mail.direction };
+        }),
+      );
+      if (sequence === threadSequenceRef.current) setThread({ subject: item.subject, loading: false, messages: details });
+    } catch {
+      if (sequence === threadSequenceRef.current) {
+        setThread({
+          subject: item.subject,
+          loading: false,
+          messages: [],
+          error: true,
+          retry: () => { void openThread(item, sourceItems); },
+        });
+      }
+    }
   }
 
   async function openNotification(value: string, loadedItems?: MailItem[]) {
@@ -365,8 +383,7 @@ export default function MailClient() {
     if (!loaded || sequence !== notificationSequenceRef.current) return;
     const target = id && loaded.find((item) => item.direction === "inbox" && item.id === id && !mailMeta(item).hidden);
     if (target) {
-      try { await openThread(target, loaded); }
-      catch { setLoadError("暂时无法打开这封邮件，请在收件箱中重试。"); }
+      await openThread(target, loaded);
     } else if (id) {
       setLoadError("收件箱已更新；这封邮件暂未出现在列表中，请稍后刷新。");
     }
@@ -461,7 +478,7 @@ export default function MailClient() {
 
       <div className="layout">
         <aside className="sidebar">
-          <button className="compose-btn" onClick={() => newCompose()}><PenSquare size={19} />Compose</button>
+          <button className="compose-btn" aria-label="Compose" onClick={() => newCompose()}><PenSquare size={19} />Compose</button>
           <nav>
             <NavButton active={!labelFilter && folder === "inbox"} icon={<Inbox size={18} />} label="Inbox" count={unreadCount} onClick={() => setFolderView("inbox")} />
             <NavButton active={!labelFilter && folder === "starred"} icon={<Star size={18} />} label="Starred" onClick={() => setFolderView("starred")} />
@@ -480,7 +497,7 @@ export default function MailClient() {
           <div className="label-list">
             {labels.map((name) => (
               <div className={labelFilter === name ? "label-row active" : "label-row"} key={name}>
-                <button onClick={() => { setLabelFilter(name); setThread(null); }}><Tag size={15} /><span>{name}</span></button>
+                <button onClick={() => { setLabelFilter(name); closeThread(); }}><Tag size={15} /><span>{name}</span></button>
                 <button className="label-remove" onClick={() => removeLabel(name)}>×</button>
               </div>
             ))}
@@ -488,7 +505,7 @@ export default function MailClient() {
 
           <div className="account">
             <label htmlFor="mail-domain-filter">Mailbox domain</label><br />
-            <select id="mail-domain-filter" aria-label="Mailbox domain" value={domainFilter} onChange={(event) => { setDomainFilter(event.target.value as MailboxFilter); setThread(null); setSelectedKeys(new Set()); }}>
+            <select id="mail-domain-filter" aria-label="Mailbox domain" value={domainFilter} onChange={(event) => { setDomainFilter(event.target.value as MailboxFilter); closeThread(); setSelectedKeys(new Set()); }}>
               <option value="all">All domains</option>
               {MAIL_DOMAINS.map((domain) => <option key={domain} value={domain}>@{domain}</option>)}
               <option value="sleepsomno.com">@sleepsomno.com (legacy inbox)</option>
@@ -502,17 +519,17 @@ export default function MailClient() {
             <ThreadView
               thread={thread}
               meta={meta}
-              back={() => setThread(null)}
+              back={closeThread}
               onCompose={newCompose}
               onArchive={() => {
                 const targets = items.filter((i) => thread.messages?.some((m: any) => m.id === i.id && m.direction === i.direction));
                 patchItems(targets, { folder: "archive" });
-                setThread(null);
+                closeThread();
               }}
               onTrash={() => {
                 const targets = items.filter((i) => thread.messages?.some((m: any) => m.id === i.id && m.direction === i.direction));
                 patchItems(targets, { folder: "trash" });
-                setThread(null);
+                closeThread();
               }}
             />
           ) : (
@@ -615,7 +632,7 @@ export default function MailClient() {
 }
 
 function NavButton({ active, icon, label, count, onClick }: any) {
-  return <button className={active ? "active" : ""} onClick={onClick}>{icon}<span className="nav-label">{label}</span>{count ? <b className="nav-count">{count}</b> : null}</button>;
+  return <button className={active ? "active" : ""} aria-label={count ? `${label}, ${count}` : label} onClick={onClick}>{icon}<span className="nav-label">{label}</span>{count ? <b className="nav-count">{count}</b> : null}</button>;
 }
 
 function EmptyFolder({ folder }: { folder: string }) {
@@ -625,12 +642,17 @@ function EmptyFolder({ folder }: { folder: string }) {
 function ThreadView({ thread, back, onCompose, onArchive, onTrash }: any) {
   return <div className="thread-view">
     <div className="thread-toolbar">
-      <button className="icon-btn" onClick={back}><ArrowLeft size={19} /></button>
+      <button className="icon-btn" aria-label="Back to message list" onClick={back}><ArrowLeft size={19} /></button>
       <button className="icon-btn" title="Archive" onClick={onArchive}><Archive size={18} /></button>
       <button className="icon-btn" title="Trash" onClick={onTrash}><Trash2 size={18} /></button>
     </div>
     <h2>{thread.subject || "(no subject)"}</h2>
-    {thread.loading ? <div className="empty">Loading conversation…</div> : thread.messages.map((message: any) => (
+    {thread.loading ? <div className="empty">Loading conversation…</div> : thread.error ? (
+      <div className="empty">
+        <p role="alert">Couldn’t open this conversation. Check your connection and try again.</p>
+        <button className="quiet-btn" onClick={thread.retry}><RefreshCw size={16} />Try again</button>
+      </div>
+    ) : thread.messages.map((message: any) => (
       <MessageCard key={`${message.direction}:${message.id}`} message={message} onCompose={onCompose} />
     ))}
   </div>;
